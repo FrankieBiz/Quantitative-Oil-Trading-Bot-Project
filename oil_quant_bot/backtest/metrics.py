@@ -268,6 +268,97 @@ class BacktestMetrics:
         """
         return len(self._trade_pnls())
 
+    def expectancy(self) -> float:
+        """Calculate trade expectancy: (win_rate * avg_win) - (loss_rate * avg_loss).
+
+        Returns:
+            Expected dollar value per trade.
+        """
+        wr = self.win_rate()
+        aw = self.avg_win()
+        al = self.avg_loss()
+        return wr * aw + (1 - wr) * al  # al is already negative
+
+    def max_consecutive_wins(self) -> int:
+        """Maximum consecutive winning trades.
+
+        Returns:
+            Length of longest winning streak.
+        """
+        pnls = self._trade_pnls()
+        if len(pnls) == 0:
+            return 0
+        wins = (pnls > 0).astype(int)
+        return int(self._max_consecutive(wins))
+
+    def max_consecutive_losses(self) -> int:
+        """Maximum consecutive losing trades.
+
+        Returns:
+            Length of longest losing streak.
+        """
+        pnls = self._trade_pnls()
+        if len(pnls) == 0:
+            return 0
+        losses = (pnls <= 0).astype(int)
+        return int(self._max_consecutive(losses))
+
+    @staticmethod
+    def _max_consecutive(binary_series: pd.Series) -> int:
+        """Count the maximum run of 1s in a binary series."""
+        if binary_series.empty:
+            return 0
+        groups = binary_series.ne(binary_series.shift()).cumsum()
+        ones = binary_series[binary_series == 1]
+        if ones.empty:
+            return 0
+        return int(ones.groupby(groups).count().max())
+
+    def avg_trade_duration(self) -> float:
+        """Average trade duration in bars.
+
+        Returns:
+            Mean number of bars per trade, or 0.0 if unavailable.
+        """
+        if self.trades_df.empty:
+            return 0.0
+        for dur_col in ("Duration", "duration"):
+            if dur_col in self.trades_df.columns:
+                durations = self.trades_df[dur_col].dropna()
+                if len(durations) > 0:
+                    return float(durations.mean())
+        # Try from entry/exit timestamps
+        for entry_col, exit_col in [
+            ("Entry Timestamp", "Exit Timestamp"),
+            ("entry_time", "exit_time"),
+        ]:
+            if entry_col in self.trades_df.columns and exit_col in self.trades_df.columns:
+                entries = pd.to_datetime(self.trades_df[entry_col])
+                exits = pd.to_datetime(self.trades_df[exit_col])
+                durations = (exits - entries).dt.total_seconds() / 3600  # hours
+                valid = durations.dropna()
+                if len(valid) > 0:
+                    return float(valid.mean())
+        return 0.0
+
+    def pnl_percentiles(self) -> dict:
+        """Compute PnL distribution percentiles.
+
+        Returns:
+            Dict with p10, p25, p50, p75, p90, skewness of trade PnLs.
+        """
+        pnls = self._trade_pnls()
+        if len(pnls) < 2:
+            return {"p10": 0.0, "p25": 0.0, "p50": 0.0, "p75": 0.0, "p90": 0.0, "skewness": 0.0}
+        return {
+            "p10": float(np.percentile(pnls, 10)),
+            "p25": float(np.percentile(pnls, 25)),
+            "p50": float(np.percentile(pnls, 50)),
+            "p75": float(np.percentile(pnls, 75)),
+            "p90": float(np.percentile(pnls, 90)),
+            "skewness": float(pnls.skew()) if hasattr(pnls, 'skew') else 0.0,
+        }
+
     def trades_per_day(self) -> float:
         """Average number of trades per calendar day.
 
@@ -433,6 +524,13 @@ class BacktestMetrics:
         self._metrics["gross_profit"] = float(pnls[pnls > 0].sum()) if len(pnls) > 0 else 0.0
         self._metrics["gross_loss"] = float(abs(pnls[pnls < 0].sum())) if len(pnls) > 0 else 0.0
         self._metrics["net_profit"] = self._metrics["gross_profit"] - self._metrics["gross_loss"]
+
+        # New metrics: expectancy, streaks, duration, distribution
+        self._metrics["expectancy"] = self.expectancy()
+        self._metrics["max_consecutive_wins"] = self.max_consecutive_wins()
+        self._metrics["max_consecutive_losses"] = self.max_consecutive_losses()
+        self._metrics["avg_trade_duration"] = self.avg_trade_duration()
+        self._metrics["pnl_percentiles"] = self.pnl_percentiles()
 
         logger.info(
             "Metrics computed  |  total_return={tr:.2f}%  sharpe={sh:.2f}  "

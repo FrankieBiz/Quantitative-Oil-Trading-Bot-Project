@@ -9,7 +9,9 @@ market regimes.
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime
+from statistics import median
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -57,6 +59,14 @@ class AdaptiveLearner:
         self.avg_win: float = 0.0
         self.avg_loss: float = 0.0
         self.kelly_fraction: float = settings.KELLY_FRACTION
+
+        # Hurst smoothing state – keep last 5 values for median smoothing.
+        self._hurst_history: deque[float] = deque(maxlen=5)
+        self._last_regime: Optional[MarketRegime] = None
+        self._hurst_hysteresis: float = 0.05
+
+        # Dynamic confidence threshold (managed by get_current_threshold).
+        self._confidence_threshold: float = settings.CONFIDENCE_THRESHOLD
 
         logger.info(
             "AdaptiveLearner initialised | rolling_window={} | retrain_threshold={}",
@@ -178,6 +188,23 @@ class AdaptiveLearner:
         self.kelly_fraction = float(
             np.clip(half_kelly, 0.0, settings.MAX_POSITION_FRACTION)
         )
+
+    def get_rolling_stats(self) -> Dict[str, float]:
+        """Return current rolling performance statistics as a dict.
+
+        Convenience method for external callers that need a snapshot of the
+        in-memory rolling statistics without directly accessing attributes.
+
+        Returns:
+            A dict with keys ``win_rate``, ``avg_win``, ``avg_loss``, and
+            ``kelly_fraction``.
+        """
+        return {
+            "win_rate": self.win_rate,
+            "avg_win": self.avg_win,
+            "avg_loss": self.avg_loss,
+            "kelly_fraction": self.kelly_fraction,
+        }
 
     # ------------------------------------------------------------------
     # 3. Incremental retraining trigger
@@ -306,6 +333,20 @@ class AdaptiveLearner:
 
         return new_threshold
 
+    def get_current_threshold(self) -> float:
+        """Return the current confidence threshold, auto-adjusting if possible.
+
+        Calls :meth:`adjust_confidence_threshold` with the internal
+        ``_confidence_threshold`` value, stores the result, and returns it.
+
+        Returns:
+            The (possibly updated) confidence threshold.
+        """
+        self._confidence_threshold = self.adjust_confidence_threshold(
+            self._confidence_threshold
+        )
+        return self._confidence_threshold
+
     # ------------------------------------------------------------------
     # 5. Regime detection
     # ------------------------------------------------------------------
@@ -339,13 +380,32 @@ class AdaptiveLearner:
             )
             return MarketRegime.CHOPPY
 
-        hurst = self.calculate_hurst(prices)
+        raw_hurst = self.calculate_hurst(prices)
         adx = self._calculate_adx(prices, period=settings.ADX_PERIOD)
 
-        # Primary: Hurst exponent
-        if hurst > settings.HURST_TRENDING_THRESHOLD:
+        # Hurst smoothing – keep a rolling window of recent values and use
+        # the median to reduce noise.
+        self._hurst_history.append(raw_hurst)
+        hurst = median(self._hurst_history)
+
+        # Primary: Hurst exponent with hysteresis bands to avoid rapid
+        # regime flipping.  Once a regime is established, the smoothed Hurst
+        # must move an additional ``_hurst_hysteresis`` (0.05) past the
+        # threshold before a switch is acknowledged.
+        trending_thresh = settings.HURST_TRENDING_THRESHOLD
+        mr_thresh = settings.HURST_MEAN_REVERTING_THRESHOLD
+        hyst = self._hurst_hysteresis
+
+        if self._last_regime == MarketRegime.TRENDING:
+            # Must drop further to leave TRENDING.
+            trending_thresh -= hyst
+        elif self._last_regime == MarketRegime.MEAN_REVERTING:
+            # Must rise further to leave MEAN_REVERTING.
+            mr_thresh += hyst
+
+        if hurst > trending_thresh:
             hurst_regime = MarketRegime.TRENDING
-        elif hurst < settings.HURST_MEAN_REVERTING_THRESHOLD:
+        elif hurst < mr_thresh:
             hurst_regime = MarketRegime.MEAN_REVERTING
         else:
             hurst_regime = MarketRegime.CHOPPY
@@ -364,8 +424,12 @@ class AdaptiveLearner:
         else:
             regime = hurst_regime
 
+        # Remember the regime for hysteresis on the next call.
+        self._last_regime = regime
+
         logger.info(
-            "Regime detected | hurst={:.4f} ({}) | adx={:.2f} ({}) | final={}",
+            "Regime detected | hurst_raw={:.4f} | hurst_smooth={:.4f} ({}) | adx={:.2f} ({}) | final={}",
+            raw_hurst,
             hurst,
             hurst_regime.value,
             adx,
@@ -410,6 +474,86 @@ class AdaptiveLearner:
 
         latest = adx.iloc[-1]
         return float(latest) if pd.notna(latest) else 0.0
+
+    @staticmethod
+    def _calculate_adx_from_ohlc(
+        df: pd.DataFrame, period: int = 14
+    ) -> float:
+        """Calculate the latest ADX value from a DataFrame with OHLC columns.
+
+        Uses ``pandas_ta.adx`` for a proper ADX calculation when high, low,
+        and close columns are available.  Falls back to the simplified
+        close-only :meth:`_calculate_adx` if pandas_ta is not installed or
+        the required columns are missing.
+
+        Args:
+            df: A ``pd.DataFrame`` with ``high``, ``low``, and ``close``
+                columns (case-insensitive).
+            period: ADX smoothing period (default 14).
+
+        Returns:
+            The most recent ADX value as a float.
+        """
+        # Normalise column names to lowercase for flexible matching.
+        col_map = {c.lower(): c for c in df.columns}
+        has_ohlc = all(k in col_map for k in ("high", "low", "close"))
+
+        if not has_ohlc:
+            logger.debug(
+                "_calculate_adx_from_ohlc: missing high/low/close columns; "
+                "falling back to close-only ADX."
+            )
+            close_col = col_map.get("close")
+            if close_col is not None:
+                return AdaptiveLearner._calculate_adx(
+                    df[close_col], period=period
+                )
+            return 0.0
+
+        try:
+            import pandas_ta  # noqa: F811
+
+            adx_df = pandas_ta.adx(
+                high=df[col_map["high"]],
+                low=df[col_map["low"]],
+                close=df[col_map["close"]],
+                length=period,
+            )
+            if adx_df is None or adx_df.empty:
+                raise ValueError("pandas_ta.adx returned empty result")
+
+            # pandas_ta names the ADX column "ADX_{period}".
+            adx_col = f"ADX_{period}"
+            if adx_col not in adx_df.columns:
+                # Fallback: pick the first column whose name starts with "ADX".
+                adx_cols = [
+                    c for c in adx_df.columns if c.upper().startswith("ADX")
+                ]
+                adx_col = adx_cols[0] if adx_cols else adx_df.columns[0]
+
+            latest = adx_df[adx_col].iloc[-1]
+            result = float(latest) if pd.notna(latest) else 0.0
+            logger.debug(
+                "ADX from OHLC (pandas_ta): {:.2f}", result
+            )
+            return result
+
+        except ImportError:
+            logger.warning(
+                "pandas_ta not installed; falling back to close-only ADX."
+            )
+            return AdaptiveLearner._calculate_adx(
+                df[col_map["close"]], period=period
+            )
+        except Exception as exc:
+            logger.error(
+                "pandas_ta ADX calculation failed: {}; falling back to "
+                "close-only ADX.",
+                exc,
+            )
+            return AdaptiveLearner._calculate_adx(
+                df[col_map["close"]], period=period
+            )
 
     # ------------------------------------------------------------------
     # 6. Regime-based adjustments

@@ -65,6 +65,8 @@ class OilTradingEnv(gym.Env):
         prices: np.ndarray,
         instrument: str = "CL",
         initial_balance: float = 100_000.0,
+        training: bool = False,
+        min_episode_length: int = 200,
     ) -> None:
         super().__init__()
 
@@ -72,6 +74,8 @@ class OilTradingEnv(gym.Env):
         self.prices = prices.astype(np.float64)
         self.instrument = instrument
         self.initial_balance = initial_balance
+        self.training = training
+        self.min_episode_length = min_episode_length
 
         n_features = self.features.shape[1]
         # state = features + [position, unrealized_pnl, portfolio_heat]
@@ -93,6 +97,11 @@ class OilTradingEnv(gym.Env):
         self._returns: List[float] = []
         self._prev_balance: float = initial_balance
 
+        # Running reward statistics for normalization
+        self._reward_mean: float = 0.0
+        self._reward_var: float = 1.0
+        self._reward_count: int = 0
+
     # ------------------------------------------------ gym API
     def reset(
         self,
@@ -101,7 +110,11 @@ class OilTradingEnv(gym.Env):
         options: Optional[dict] = None,
     ) -> Tuple[np.ndarray, dict]:
         super().reset(seed=seed)
-        self._step_idx = 0
+        if self.training and len(self.features) > self.min_episode_length:
+            max_start = len(self.features) - self.min_episode_length
+            self._step_idx = self.np_random.integers(0, max_start)
+        else:
+            self._step_idx = 0
         self._position = 0.0
         self._entry_price = 0.0
         self._balance = self.initial_balance
@@ -155,14 +168,23 @@ class OilTradingEnv(gym.Env):
         margin_call = 1.0 if self._balance < self.initial_balance * 0.5 else 0.0
 
         # ---- Composite reward ----------------------------------------------
-        pnl_frac = position_pnl / self.initial_balance if self.initial_balance != 0 else 0.0
+        pnl_frac = position_pnl / self._balance if self._balance != 0 else 0.0
         reward = (
             pnl_frac
             - settings.REWARD_DRAWDOWN_PENALTY * drawdown
-            - settings.REWARD_TRANSACTION_COST * (txn_cost / self.initial_balance)
-            + settings.REWARD_SHARPE_BONUS * max(sharpe, 0.0)
+            - settings.REWARD_TRANSACTION_COST * (txn_cost / self._balance if self._balance != 0 else 0.0)
+            + settings.REWARD_SHARPE_BONUS * sharpe
             - settings.REWARD_MARGIN_CALL_PENALTY * margin_call
         )
+
+        # ---- Normalize reward using running mean/std -----------------------
+        self._reward_count += 1
+        delta = reward - self._reward_mean
+        self._reward_mean += delta / self._reward_count
+        delta2 = reward - self._reward_mean
+        self._reward_var += (delta * delta2 - self._reward_var) / self._reward_count
+        reward_std = math.sqrt(self._reward_var) if self._reward_var > 0 else 1.0
+        reward = (reward - self._reward_mean) / (reward_std + 1e-8)
 
         # ---- Advance -------------------------------------------------------
         self._position = desired_pos
@@ -259,6 +281,7 @@ class RLPositionSizer:
                 features=historical_features,
                 prices=historical_prices,
                 instrument=instrument,
+                training=True,
             )
         ])
 

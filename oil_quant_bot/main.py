@@ -76,7 +76,7 @@ class OilQuantBot:
         self.feature_engineer = FeatureEngineer()
         self.signal_model = SignalModel()
         self.rl_sizer = RLPositionSizer()
-        self.risk_manager = RiskManager()
+        self.risk_manager = RiskManager(portfolio_value=100_000.0)  # default; updated on connect
         self.broker = BrokerExecutor()
         self.backtest_engine = BacktestEngine()
         self.adaptive_learner = AdaptiveLearner()
@@ -117,6 +117,16 @@ class OilQuantBot:
             logger.error(f"Failed to connect to IBKR: {e}")
             logger.warning("Continuing in offline mode - backtest only.")
 
+        # Update risk manager portfolio value from broker
+        if self.broker.connected:
+            try:
+                pv = self.broker.get_portfolio_value()
+                if pv > 0:
+                    self.risk_manager.update_portfolio_value(pv)
+                    logger.info(f"Portfolio value: ${pv:,.2f}")
+            except Exception as e:
+                logger.warning(f"Could not fetch portfolio value: {e}")
+
         # Step 2: Warm up market data
         logger.info("[2/6] Warming up market data...")
         try:
@@ -147,37 +157,42 @@ class OilQuantBot:
         logger.info("Startup sequence complete. Entering live loop.")
 
     async def _warmup_market_data(self):
-        """Fetch historical data for all instruments."""
-        for symbol in settings.ALL_INSTRUMENTS:
-            try:
-                logger.info(f"Fetching historical bars for {symbol}...")
-                await self.market_feed.fetch_historical_bars(
-                    symbol, bar_count=settings.WARMUP_BARS
-                )
-            except Exception as e:
-                logger.error(f"Failed to fetch history for {symbol}: {e}")
+        """Fetch historical data for all instruments including cross-asset."""
+        try:
+            await self.market_feed.fetch_historical_bars()
+            logger.info("Historical bars fetched for all instruments.")
+        except Exception as e:
+            logger.error(f"Failed to fetch historical bars: {e}")
+
+        # Fetch cross-asset data for correlation features
+        try:
+            await self.market_feed.fetch_cross_asset_bars()
+            logger.info("Cross-asset bars fetched (DXY, SPX, crack spread).")
+        except Exception as e:
+            logger.warning(f"Cross-asset data fetch failed: {e}")
 
     async def _load_or_train_models(self):
         """Load latest saved models or train fresh ones."""
         # Try loading XGBoost model
-        try:
-            self.signal_model.load_latest_model()
+        if self.signal_model.load_latest_model():
             logger.info("Loaded latest XGBoost signal model.")
-        except FileNotFoundError:
+        else:
             logger.info("No saved XGBoost model found. Will train on first available data.")
 
-        # Try loading RL agent
-        try:
-            self.rl_sizer.load_model()
-            logger.info("Loaded latest RL position sizer.")
-        except FileNotFoundError:
-            logger.info("No saved RL model found. Will train on first available data.")
+        # Try loading RL agents (per instrument)
+        any_rl_loaded = False
+        for inst in self.rl_sizer.instruments:
+            if self.rl_sizer.load_model(inst):
+                any_rl_loaded = True
+        if any_rl_loaded:
+            logger.info("Loaded RL position sizer model(s).")
+        else:
+            logger.info("No saved RL models found. Will train on first available data.")
 
-        # Try loading feature scaler
-        try:
-            self.feature_engineer.load_scaler()
-            logger.info("Loaded feature scaler.")
-        except FileNotFoundError:
+        # Feature scaler is auto-loaded in FeatureEngineer.__init__
+        if self.feature_engineer.scaler is not None:
+            logger.info("Feature scaler loaded.")
+        else:
             logger.info("No saved scaler found. Will fit on first available data.")
 
     def _setup_scheduler(self):
@@ -341,7 +356,7 @@ class OilQuantBot:
     async def _process_instrument(self, symbol: str):
         """Generate signals and potentially trade for a single instrument."""
         # Get latest bar data
-        bars_df = self.market_feed.get_bars(symbol, bar_size="5 mins")
+        bars_df = self.market_feed.get_enriched_dataframe(symbol, bar_size="5 mins")
         if bars_df is None or len(bars_df) < settings.WARMUP_BARS:
             return
 
@@ -360,37 +375,40 @@ class OilQuantBot:
             bar_timestamp=bars_df.index[-1],
         )
 
-        if features is None:
+        # Check feature staleness
+        staleness = self.feature_engineer.check_feature_staleness(features)
+        if staleness["is_stale"]:
+            logger.warning(f"Stale features detected for {symbol}, skipping signal generation")
             return
 
         # Scale features
-        try:
-            scaled_features = self.feature_engineer.transform(features)
-        except Exception:
-            logger.warning(f"Scaler not fitted for {symbol}. Skipping.")
-            return
+        scaled_features = self.feature_engineer.transform(features)
 
         # Get ML signal
-        p_long, p_flat, p_short, signal_strength = self.signal_model.predict(
-            scaled_features
-        )
+        prediction = self.signal_model.predict(scaled_features)
+        p_long = prediction["P_long"]
+        p_flat = prediction["P_flat"]
+        p_short = prediction["P_short"]
+        signal_strength = prediction["signal_strength"]
 
-        # Check confidence threshold
-        current_threshold = self.adaptive_learner.get_current_threshold()
+        # Check confidence threshold (adaptive)
+        current_threshold = self.adaptive_learner.adjust_confidence_threshold(
+            settings.CONFIDENCE_THRESHOLD
+        )
         if max(p_long, p_short) < current_threshold:
             return  # Not confident enough
 
         # Determine direction
         if p_long > p_short and signal_strength > 0:
-            direction = TradeDirection.LONG
+            direction = "LONG"
         elif p_short > p_long and signal_strength < 0:
-            direction = TradeDirection.SHORT
+            direction = "SHORT"
         else:
             return
 
         # Get RL-based position sizing
         rl_state = self._build_rl_state(scaled_features, symbol)
-        rl_action = self.rl_sizer.predict(rl_state)
+        rl_action = self.rl_sizer.predict(symbol, rl_state)
 
         # Check if RL agrees with direction
         if direction == TradeDirection.LONG and rl_action < settings.RL_ACTION_THRESHOLD:
@@ -417,23 +435,19 @@ class OilQuantBot:
         regime = self.adaptive_learner.detect_regime(bars_df["close"])
         regime_adj = self.adaptive_learner.get_regime_adjustments(regime)
 
-        # Calculate position size (Kelly)
-        session = get_session()
-        try:
-            rolling_stats = self.adaptive_learner.get_rolling_stats(session)
-            kelly_fraction = self.risk_manager.calculate_kelly_fraction(
-                rolling_stats["win_rate"],
-                rolling_stats["avg_win"],
-                rolling_stats["avg_loss"],
-            )
-        finally:
-            session.close()
+        # Calculate position size (Kelly) from adaptive learner's rolling stats
+        kelly_fraction = self.risk_manager.calculate_kelly_fraction(
+            self.adaptive_learner.win_rate,
+            self.adaptive_learner.avg_win,
+            self.adaptive_learner.avg_loss,
+        )
 
         # Apply RL scaling and regime adjustments
         position_size = abs(rl_action) * kelly_fraction * regime_adj["position_size_mult"]
 
         # Portfolio value for sizing
-        portfolio_value = await self.broker.get_portfolio_value()
+        portfolio_value = self.broker.get_portfolio_value()
+        self.risk_manager.update_portfolio_value(portfolio_value)
         quantity = self._calculate_quantity(
             symbol, entry_price, position_size, portfolio_value
         )
@@ -442,18 +456,19 @@ class OilQuantBot:
             return
 
         # Risk management gate
+        open_positions = self.broker.get_positions()
         trade_params = {
             "instrument": symbol,
             "direction": direction,
-            "quantity": quantity,
             "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
+            "atr": atr,
+            "portfolio": {"equity": portfolio_value, "equity_start_of_day": portfolio_value},
+            "peak_equity": portfolio_value,
+            "open_positions": open_positions,
+            "requested_size": quantity * entry_price,
             "signal_strength": signal_strength,
             "confidence": max(p_long, p_short),
-            "atr": atr,
             "regime": regime,
-            "portfolio_value": portfolio_value,
             "features": scaled_features.tolist() if hasattr(scaled_features, "tolist") else list(scaled_features),
             "css_score": sentiment.get("css_score", 0),
         }
@@ -466,13 +481,15 @@ class OilQuantBot:
             logger.info(f"Trade rejected for {symbol}: {reason}")
             return
 
-        # Adjust quantity if risk manager modified size
-        if adjusted_size != quantity:
-            quantity = adjusted_size
+        # Adjust quantity if risk manager modified size (adjusted_size is dollar notional)
+        adjusted_qty = self._calculate_quantity(symbol, entry_price, adjusted_size / max(portfolio_value, 1), portfolio_value)
+        if adjusted_qty <= 0:
+            return
+        quantity = adjusted_qty
 
         # Execute trade
         logger.info(
-            f"TRADE SIGNAL: {direction.value} {symbol} qty={quantity} "
+            f"TRADE SIGNAL: {direction} {symbol} qty={quantity} "
             f"entry={entry_price:.2f} SL={stop_loss:.2f} TP={take_profit:.2f} "
             f"signal={signal_strength:.3f} regime={regime.value}"
         )
@@ -488,6 +505,7 @@ class OilQuantBot:
             )
 
             # Log trade to DB
+            trade_params["quantity"] = quantity
             self._log_trade(trade, trade_params)
 
         except Exception as e:
@@ -495,18 +513,18 @@ class OilQuantBot:
 
     def _build_rl_state(self, features: np.ndarray, symbol: str) -> np.ndarray:
         """Build the state vector for the RL agent."""
-        # Get current position info
-        positions = self.broker.get_positions_sync()
+        # Get current position info (synchronous calls)
+        positions = self.broker.get_positions()
         current_pos = 0
         unrealized_pnl = 0.0
         for pos in positions:
             if pos.get("instrument") == symbol:
                 current_pos = pos.get("quantity", 0)
-                unrealized_pnl = pos.get("unrealized_pnl", 0.0)
+                unrealized_pnl = pos.get("unrealized_pnl", 0.0) or 0.0
 
-        portfolio_value = self.broker.get_portfolio_value_sync()
+        portfolio_value = self.broker.get_portfolio_value()
         portfolio_heat = sum(
-            abs(p.get("market_value", 0)) for p in positions
+            abs(p.get("market_value", 0) or 0) for p in positions
         ) / max(portfolio_value, 1)
 
         extra_state = np.array([current_pos, unrealized_pnl, portfolio_heat])
@@ -533,14 +551,15 @@ class OilQuantBot:
         session = get_session()
         try:
             import uuid
+            trade_dir = TradeDirection.LONG if params["direction"] == "LONG" else TradeDirection.SHORT
             trade = Trade(
                 trade_id=str(uuid.uuid4()),
                 instrument=params["instrument"],
-                direction=params["direction"],
+                direction=trade_dir,
                 status=TradeStatus.OPEN,
                 entry_time=datetime.utcnow(),
                 entry_price=params["entry_price"],
-                entry_quantity=params["quantity"],
+                entry_quantity=params.get("quantity", 0),
                 stop_loss_price=params["stop_loss"],
                 take_profit_price=params["take_profit"],
                 signal_strength=params["signal_strength"],
@@ -645,13 +664,38 @@ class OilQuantBot:
         """Retrain RL position sizer weekly."""
         logger.info("Starting weekly RL retrain...")
         try:
-            for symbol in ["CL", "BZ"]:
-                bars_df = self.market_feed.get_bars(symbol, "1 hour")
-                if bars_df is not None and len(bars_df) > 500:
-                    self.rl_sizer.train(bars_df, symbol)
-                    logger.info(f"RL retrain complete for {symbol}")
+            session = get_session()
+            from db.models import FeatureSnapshot, BarData
 
-            self.rl_sizer.save_model()
+            cutoff = datetime.utcnow() - timedelta(days=settings.TRAINING_LOOKBACK_DAYS)
+
+            for symbol in ["CL", "BZ"]:
+                features = session.query(FeatureSnapshot).filter(
+                    FeatureSnapshot.timestamp >= cutoff
+                ).order_by(FeatureSnapshot.timestamp).all()
+
+                bars = session.query(BarData).filter(
+                    BarData.timestamp >= cutoff,
+                    BarData.instrument == symbol,
+                ).order_by(BarData.timestamp).all()
+
+                if len(features) < 500 or len(bars) < 500:
+                    logger.warning(f"Insufficient data for RL retrain on {symbol}. Skipping.")
+                    continue
+
+                min_len = min(len(features), len(bars))
+                historical_features = np.array([f.features for f in features[:min_len]])
+                historical_prices = np.array([b.close for b in bars[:min_len]])
+
+                try:
+                    historical_features = self.feature_engineer.transform(historical_features)
+                except Exception:
+                    logger.warning(f"Scaler not fitted for {symbol}. Using raw features for RL retrain.")
+
+                self.rl_sizer.train(symbol, historical_features, historical_prices)
+                logger.info(f"RL retrain complete for {symbol}")
+
+            session.close()
         except Exception as e:
             logger.error(f"RL retrain failed: {e}")
 
@@ -679,7 +723,7 @@ class OilQuantBot:
     async def _snapshot_portfolio(self):
         """Take a portfolio state snapshot."""
         try:
-            account = await self.broker.get_account_summary()
+            account = self.broker.get_account_summary()
             if not account:
                 return
 
@@ -721,8 +765,11 @@ class OilQuantBot:
 
         # Save models
         try:
-            self.signal_model.save_model()
-            self.rl_sizer.save_model()
+            if self.signal_model.model is not None:
+                self.signal_model.save_model()
+            for inst in self.rl_sizer.instruments:
+                if inst in self.rl_sizer._models:
+                    self.rl_sizer.save_model(inst)
             self.feature_engineer.save_scaler()
         except Exception as e:
             logger.error(f"Error saving models: {e}")

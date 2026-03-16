@@ -24,7 +24,7 @@ IBKR_PORT = IBKR_PORT_LIVE if LIVE_MODE else IBKR_PORT_PAPER
 # Connection settings
 IBKR_TIMEOUT = 30  # seconds
 IBKR_RECONNECT_DELAY = 5  # seconds
-IBKR_HEARTBEAT_INTERVAL = 10  # seconds
+IBKR_HEARTBEAT_INTERVAL = 30  # seconds (10s was too aggressive for IBKR)
 IBKR_MAX_RECONNECT_ATTEMPTS = 10
 
 # ==============================================================================
@@ -40,6 +40,18 @@ ETF_INSTRUMENTS = {
     "XLE": {"exchange": "ARCA", "sec_type": "STK", "currency": "USD", "description": "Energy Select Sector SPDR"},
 }
 
+# Cross-asset instruments for correlation features
+CROSS_ASSET_INSTRUMENTS = {
+    "DX": {"exchange": "NYBOT", "sec_type": "FUT", "currency": "USD", "description": "US Dollar Index"},
+    "ES": {"exchange": "CME", "sec_type": "FUT", "currency": "USD", "description": "E-mini S&P 500"},
+}
+
+# Crack spread components
+CRACK_SPREAD_INSTRUMENTS = {
+    "RB": {"exchange": "NYMEX", "sec_type": "FUT", "currency": "USD", "description": "RBOB Gasoline"},
+    "HO": {"exchange": "NYMEX", "sec_type": "FUT", "currency": "USD", "description": "Heating Oil"},
+}
+
 ALL_INSTRUMENTS = {**FUTURES_INSTRUMENTS, **ETF_INSTRUMENTS}
 
 # Correlation tracking
@@ -52,7 +64,7 @@ CORRELATED_GROUPS = [
 # ==============================================================================
 BAR_SIZES = ["1 min", "5 mins", "15 mins", "1 hour", "1 day"]
 WARMUP_BARS = 200
-HISTORICAL_LOOKBACK = "5 D"  # for warmup
+HISTORICAL_LOOKBACK = "30 D"  # for warmup (EMA-200 needs ~200 bars to converge)
 
 # Alternative data refresh interval
 ALT_DATA_INTERVAL_MINUTES = 5
@@ -105,6 +117,10 @@ MAJOR_NEWS_SOURCES = {"reuters", "bloomberg", "associated press", "ap news", "re
 
 # Recency decay
 RECENCY_DECAY_LAMBDA = 0.1  # λ for e^(-λ * age_in_hours)
+
+# Sentiment confidence gating
+MIN_SENTIMENT_VOLUME = 10  # minimum records in 48h window for CSS to be reliable
+SENTIMENT_REGIME_SHIFT_THRESHOLD = 0.4  # CSS delta magnitude to flag regime shift
 
 # ==============================================================================
 # TECHNICAL INDICATORS
@@ -204,7 +220,7 @@ REWARD_MARGIN_CALL_PENALTY = 0.3
 # Kelly criterion
 KELLY_FRACTION = 0.5  # half-Kelly
 KELLY_ROLLING_TRADES = 50
-MAX_POSITION_FRACTION = 0.15  # 15% of portfolio
+MAX_POSITION_FRACTION = 0.10  # 10% of portfolio (conservative for oil futures)
 
 # Stop-loss / Take-profit
 STOP_LOSS_ATR_MULT = 2.0
@@ -230,14 +246,15 @@ SHARPE_REDUCTION_CONSECUTIVE_DAYS = 5
 SHARPE_HALT_THRESHOLD = 0.0
 SHARPE_HALT_CONSECUTIVE_DAYS = 10
 SHARPE_POSITION_REDUCTION = 0.5  # reduce by 50%
-RISK_FREE_RATE = 0.05  # annualized
+RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))  # annualized; update via env
 
 # ==============================================================================
 # ORDER EXECUTION
 # ==============================================================================
 ORDER_THROTTLE_MAX_PER_MINUTE = 20
 LIMIT_OFFSET_PCT = 0.0005  # ±0.05%
-SLIPPAGE_PCT = 0.0002  # 0.02% for backtesting
+SLIPPAGE_PCT = 0.0005  # 0.05% for oil futures backtesting (realistic for CL)
+COMMISSION_PER_CONTRACT = 2.25  # USD per contract for CL on IBKR
 
 # ==============================================================================
 # BACKTESTING
@@ -246,8 +263,22 @@ BACKTEST_IN_SAMPLE_START = "2019-01-01"
 BACKTEST_IN_SAMPLE_END = "2022-12-31"
 BACKTEST_OUT_SAMPLE_START = "2023-01-01"
 BACKTEST_OUT_SAMPLE_END = "2024-12-31"
-WALK_FORWARD_FOLDS_MIN = 20
+WALK_FORWARD_FOLDS_MIN = 15  # reduced from 20 to fit 4-year in-sample window
 MONTE_CARLO_SIMULATIONS = 10_000
+
+# ==============================================================================
+# CONCEPT DRIFT DETECTION
+# ==============================================================================
+DRIFT_PSI_THRESHOLD = 0.25  # Population Stability Index threshold for retraining
+DRIFT_CHECK_INTERVAL_BARS = 100  # check drift every N bars
+DRIFT_REFERENCE_WINDOW = 500  # number of training samples for reference distribution
+
+# ==============================================================================
+# HEALTH CHECKS
+# ==============================================================================
+HEALTH_CHECK_INTERVAL = 60  # seconds between health checks
+MAX_DATA_STALE_SECONDS = 300  # 5 minutes max data staleness
+MAX_CONSECUTIVE_ERRORS = 5  # circuit breaker threshold
 
 # ==============================================================================
 # ADAPTIVE LEARNING

@@ -69,6 +69,9 @@ class TechnicalEngine:
         # ---- Oil-specific --------------------------------------------
         self._compute_oil_specific(df, out, instrument)
 
+        # ---- Term structure ------------------------------------------
+        self._compute_term_structure(df, out)
+
         # ---- EMA crossover -------------------------------------------
         self._compute_ema_crossover(df, out)
 
@@ -261,6 +264,65 @@ class TechnicalEngine:
             out["oil_spx_corr"] = self._last(df["oil_spx_corr"])
         else:
             out["oil_spx_corr"] = None
+
+        # Contango / Backwardation (Term Structure)
+        if "close_front" in df.columns and "close_second_month" in df.columns:
+            df["term_structure_spread"] = df["close_front"] - df["close_second_month"]
+            df["contango_flag"] = df["term_structure_spread"].apply(
+                lambda x: 1.0 if x < 0 else (-1.0 if x > 0 else 0.0)
+            )
+            out["term_structure_spread"] = self._last(df["term_structure_spread"])
+            out["contango_flag"] = self._last(df["contango_flag"])
+        else:
+            out["term_structure_spread"] = None
+            out["contango_flag"] = None
+
+        # Crack Spread (3:2:1)
+        if "close_rb" in df.columns and "close_ho" in df.columns:
+            df["crack_spread"] = 2 * df["close_rb"] + 1 * df["close_ho"] - 3 * df["close"]
+            out["crack_spread"] = self._last(df["crack_spread"])
+        else:
+            out["crack_spread"] = None
+
+        # Seasonal Pattern (cyclical encoding of month-of-year)
+        if hasattr(df.index, "month"):
+            month = df.index.month
+        else:
+            month = pd.to_datetime(df.index).month
+        df["seasonal_sin"] = np.sin(2 * np.pi * month / 12)
+        df["seasonal_cos"] = np.cos(2 * np.pi * month / 12)
+        out["seasonal_sin"] = self._last(df["seasonal_sin"])
+        out["seasonal_cos"] = self._last(df["seasonal_cos"])
+
+        # Inventory-to-Supply Ratio
+        if "crude_stocks" in df.columns and "crude_production" in df.columns:
+            df["inventory_supply_ratio"] = df["crude_stocks"] / df["crude_production"].replace(0, np.nan)
+            out["inventory_supply_ratio"] = self._last(df["inventory_supply_ratio"])
+        else:
+            out["inventory_supply_ratio"] = None
+
+    # ==================================================================
+    # Term structure analysis
+    # ==================================================================
+    def _compute_term_structure(
+        self, df: pd.DataFrame, out: Dict[str, Optional[float]]
+    ) -> None:
+        """Compute rolling term-structure metrics from front and second-month closes."""
+        if "close_front" not in df.columns or "close_second_month" not in df.columns:
+            out["term_structure_roll_yield"] = None
+            out["term_structure_zscore"] = None
+            return
+
+        spread = df["close_front"] - df["close_second_month"]
+        # Roll yield: spread as percentage of front-month price
+        df["term_structure_roll_yield"] = spread / df["close_front"].replace(0, np.nan)
+        out["term_structure_roll_yield"] = self._last(df["term_structure_roll_yield"])
+
+        # Z-score of the spread over a rolling window
+        spread_ma = spread.rolling(window=settings.CORR_ROLLING_WINDOW).mean()
+        spread_std = spread.rolling(window=settings.CORR_ROLLING_WINDOW).std()
+        df["term_structure_zscore"] = (spread - spread_ma) / spread_std.replace(0, np.nan)
+        out["term_structure_zscore"] = self._last(df["term_structure_zscore"])
 
     # ==================================================================
     # EMA crossover detection

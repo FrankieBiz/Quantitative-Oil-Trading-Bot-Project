@@ -50,12 +50,20 @@ class SignalModel:
 
     # -------------------------------------------------------------- labels
     @staticmethod
-    def _compute_labels(close_series: pd.Series, forward_bars: int = None) -> np.ndarray:
+    def _compute_labels(
+        close_series: pd.Series,
+        forward_bars: int = None,
+        volatility: pd.Series = None,
+    ) -> np.ndarray:
         """Compute target labels from a close-price series.
 
-        y =  1  if return(t + forward_bars) >  +0.4 %
-        y = -1  if return(t + forward_bars) <  -0.4 %
+        y =  1  if return(t + forward_bars) >  +long_threshold
+        y = -1  if return(t + forward_bars) <  short_threshold
         y =  0  otherwise
+
+        When *volatility* is provided the fixed thresholds are scaled by
+        ``volatility / median(volatility)`` so that labels adapt to the
+        current volatility regime.
 
         Returns mapped labels suitable for XGBoost (0, 1, 2).
         """
@@ -63,10 +71,25 @@ class SignalModel:
             forward_bars = settings.FORWARD_BARS
 
         fwd_return = close_series.shift(-forward_bars) / close_series - 1.0
+
+        if volatility is not None:
+            median_vol = volatility.median()
+            # Avoid division by zero; fall back to fixed thresholds
+            if median_vol > 0:
+                vol_ratio = volatility / median_vol
+                long_thresh = settings.LONG_THRESHOLD * vol_ratio
+                short_thresh = settings.SHORT_THRESHOLD * vol_ratio
+            else:
+                long_thresh = settings.LONG_THRESHOLD
+                short_thresh = settings.SHORT_THRESHOLD
+        else:
+            long_thresh = settings.LONG_THRESHOLD
+            short_thresh = settings.SHORT_THRESHOLD
+
         raw_labels = np.where(
-            fwd_return > settings.LONG_THRESHOLD,
+            fwd_return > long_thresh,
             1,
-            np.where(fwd_return < settings.SHORT_THRESHOLD, -1, 0),
+            np.where(fwd_return < short_thresh, -1, 0),
         )
         mapped = np.array([_LABEL_MAP[int(l)] for l in raw_labels], dtype=np.int32)
         return mapped
@@ -168,9 +191,19 @@ class SignalModel:
         agg = self._aggregate_metrics(fold_metrics)
         self._log_metrics(agg, prefix="Walk-Forward")
 
+        # Compute inverse-frequency class weights for imbalance handling
+        classes, counts = np.unique(y, return_counts=True)
+        total = len(y)
+        weight_map = {c: total / (len(classes) * cnt) for c, cnt in zip(classes, counts)}
+        sample_weights = np.array([weight_map[label] for label in y], dtype=np.float64)
+        logger.info(
+            "Class weights (inverse freq): {}",
+            {_CLASS_NAMES[c]: round(w, 4) for c, w in weight_map.items()},
+        )
+
         # Final model on all data
         self.model = self._build_classifier()
-        self.model.fit(X, y)
+        self.model.fit(X, y, sample_weight=sample_weights)
         logger.info("Final model trained on {} samples for instrument={}", n, self.instrument)
 
         # Feature importances
@@ -252,6 +285,73 @@ class SignalModel:
             len(y_new),
         )
         self.save_model()
+
+    # ------------------------------------------------- concept drift
+    def check_concept_drift(
+        self,
+        recent_features: np.ndarray,
+        reference_features: np.ndarray,
+    ) -> dict:
+        """Detect concept drift via Population Stability Index (PSI).
+
+        For each feature column the distributions of *reference_features*
+        (expected) and *recent_features* (actual) are compared using 10
+        quantile bins.  The per-feature PSI values are averaged to produce
+        an overall score.
+
+        Parameters
+        ----------
+        recent_features : np.ndarray
+            Shape ``(n_recent, n_features)`` — the most recent observations.
+        reference_features : np.ndarray
+            Shape ``(n_ref, n_features)`` — the historical reference window.
+
+        Returns
+        -------
+        dict
+            ``psi`` (float), ``drift_detected`` (bool),
+            ``drifted_features`` (list of int indices where per-feature
+            PSI > threshold).
+        """
+        n_features = reference_features.shape[1]
+        psi_values: List[float] = []
+        eps = 1e-6  # avoid log(0) / division-by-zero
+
+        for col in range(n_features):
+            ref = reference_features[:, col]
+            rec = recent_features[:, col]
+
+            # Build 10 quantile-based bin edges from the reference distribution
+            quantiles = np.linspace(0, 100, 11)  # 0, 10, 20, …, 100
+            bin_edges = np.unique(np.percentile(ref, quantiles))
+
+            # Bucket both distributions
+            expected_counts = np.histogram(ref, bins=bin_edges)[0].astype(float)
+            actual_counts = np.histogram(rec, bins=bin_edges)[0].astype(float)
+
+            # Convert to percentages
+            expected_pct = expected_counts / expected_counts.sum() + eps
+            actual_pct = actual_counts / actual_counts.sum() + eps
+
+            psi = float(np.sum((actual_pct - expected_pct) * np.log(actual_pct / expected_pct)))
+            psi_values.append(psi)
+
+        overall_psi = float(np.mean(psi_values))
+        threshold = settings.DRIFT_PSI_THRESHOLD
+        drifted = [i for i, v in enumerate(psi_values) if v > threshold]
+
+        logger.info(
+            "Concept drift check: overall PSI={:.4f}, threshold={}, drifted_features={}",
+            overall_psi,
+            threshold,
+            drifted,
+        )
+
+        return {
+            "psi": overall_psi,
+            "drift_detected": overall_psi > threshold,
+            "drifted_features": drifted,
+        }
 
     # ------------------------------------------------- save / load
     def save_model(self) -> Path:

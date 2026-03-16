@@ -48,14 +48,18 @@ class FeatureEngineer:
         "obv_zscore",
         "volume_zscore",
         "vwap_distance",
-        # Oil-specific (3)
+        # Oil-specific (6)
         "wti_brent_spread",
         "oil_dxy_corr20",
         "oil_spx_corr20",
-        # Sentiment (3)
+        "term_structure_spread",
+        "crack_spread",
+        "contango_flag",
+        # Sentiment (4)
         "css_score",
         "css_momentum",
         "css_volume_zscore",
+        "css_confidence",
         # Calendar (4)
         "hour_sin",
         "hour_cos",
@@ -139,11 +143,15 @@ class FeatureEngineer:
         wti_brent_spread = float(technicals.get("wti_brent_spread", 0.0))
         oil_dxy_corr20 = float(technicals.get("oil_dxy_corr20", 0.0))
         oil_spx_corr20 = float(technicals.get("oil_spx_corr20", 0.0))
+        term_structure_spread = float(technicals.get("term_structure_spread", 0.0))
+        crack_spread = float(technicals.get("crack_spread", 0.0))
+        contango_flag = float(technicals.get("contango_flag", 0.0))
 
         # --- Sentiment --------------------------------------------------------
         css_score = float(sentiment.get("css_score", 0.0))
         css_momentum = float(sentiment.get("css_momentum", 0.0))
         css_volume_zscore = float(sentiment.get("css_volume_zscore", 0.0))
+        css_confidence = float(sentiment.get("css_confidence", 1.0))
 
         # --- Calendar (cyclical encoding) -------------------------------------
         hour_of_day = bar_timestamp.hour + bar_timestamp.minute / 60.0
@@ -166,7 +174,8 @@ class FeatureEngineer:
                 atr14, bb_pct_b, bb_width, hist_vol20,
                 obv_zscore, volume_zscore, vwap_distance,
                 wti_brent_spread, oil_dxy_corr20, oil_spx_corr20,
-                css_score, css_momentum, css_volume_zscore,
+                term_structure_spread, crack_spread, contango_flag,
+                css_score, css_momentum, css_volume_zscore, css_confidence,
                 hour_sin, hour_cos, dow_sin, dow_cos,
                 eia_surprise,
             ],
@@ -311,6 +320,37 @@ class FeatureEngineer:
             logger.exception("Failed to store FeatureSnapshot for instrument={}", self.instrument)
         finally:
             session.close()
+
+    # ---------------------------------------------------- staleness detection
+    def check_feature_staleness(self, features: np.ndarray) -> dict:
+        """Check for potentially stale features (stuck at 0.0).
+
+        Returns a dict with staleness info. Features that are expected to be
+        non-zero during market hours are checked.
+        """
+        # Features that should rarely be exactly 0.0 during market hours
+        expected_nonzero = [
+            "ema9", "ema21", "ema50", "atr14", "rsi14", "hist_vol20",
+        ]
+        stale_features = []
+        for name in expected_nonzero:
+            if name in self.FEATURE_NAMES:
+                idx = self.FEATURE_NAMES.index(name)
+                if idx < len(features) and features[idx] == 0.0:
+                    stale_features.append(name)
+
+        stale_ratio = len(stale_features) / len(expected_nonzero) if expected_nonzero else 0.0
+        if stale_ratio > 0.5:
+            logger.warning(
+                "Feature staleness detected: {}/{} features are zero: {}",
+                len(stale_features), len(expected_nonzero), stale_features,
+            )
+
+        return {
+            "stale_features": stale_features,
+            "stale_ratio": stale_ratio,
+            "is_stale": stale_ratio > 0.5,
+        }
 
     # ---------------------------------------------------- convenience
     def build_and_transform(

@@ -44,6 +44,30 @@ def _build_contracts() -> Dict[str, Contract]:
     return contracts
 
 
+def _build_cross_asset_contracts() -> Dict[str, Contract]:
+    """Build contracts for cross-asset correlation instruments (DXY, SPX)."""
+    contracts: Dict[str, Contract] = {}
+    for symbol, meta in settings.CROSS_ASSET_INSTRUMENTS.items():
+        contracts[symbol] = Future(
+            symbol=symbol,
+            exchange=meta["exchange"],
+            currency=meta["currency"],
+        )
+    return contracts
+
+
+def _build_crack_spread_contracts() -> Dict[str, Contract]:
+    """Build contracts for crack spread components (RBOB, Heating Oil)."""
+    contracts: Dict[str, Contract] = {}
+    for symbol, meta in settings.CRACK_SPREAD_INSTRUMENTS.items():
+        contracts[symbol] = Future(
+            symbol=symbol,
+            exchange=meta["exchange"],
+            currency=meta["currency"],
+        )
+    return contracts
+
+
 # ---------------------------------------------------------------------------
 # Bar-size helpers
 # ---------------------------------------------------------------------------
@@ -87,6 +111,8 @@ class MarketDataFeed:
     def __init__(self) -> None:
         self._ib = IB()
         self._contracts: Dict[str, Contract] = _build_contracts()
+        self._cross_asset_contracts: Dict[str, Contract] = _build_cross_asset_contracts()
+        self._crack_contracts: Dict[str, Contract] = _build_crack_spread_contracts()
         self._connected = False
         self._reconnect_attempts = 0
 
@@ -98,6 +124,9 @@ class MarketDataFeed:
         # Track active realtime-bar subscriptions for teardown
         self._realtime_handles: list = []
         self._heartbeat_task: Optional[asyncio.Task] = None
+
+        # Contract roll tracking: {symbol: last_qualified_expiry}
+        self._active_expiries: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Connection management
@@ -430,3 +459,134 @@ class MarketDataFeed:
     def instruments(self) -> List[str]:
         """List of subscribed instrument symbols."""
         return list(self._contracts.keys())
+
+    # ------------------------------------------------------------------
+    # Cross-asset data for correlation features
+    # ------------------------------------------------------------------
+
+    async def fetch_cross_asset_bars(
+        self,
+        lookback: str | None = None,
+        bar_size: str = "5 mins",
+    ) -> None:
+        """Fetch historical bars for cross-asset instruments (DXY, SPX).
+
+        These are used for oil-DXY and oil-SPX correlation features.
+        """
+        lookback = lookback or settings.HISTORICAL_LOOKBACK
+        all_contracts = {**self._cross_asset_contracts, **self._crack_contracts}
+
+        for symbol, contract in all_contracts.items():
+            try:
+                bars = await self._ib.reqHistoricalDataAsync(
+                    contract,
+                    endDateTime="",
+                    durationStr=lookback,
+                    barSizeSetting=bar_size,
+                    whatToShow="TRADES",
+                    useRTH=False,
+                    formatDate=2,
+                )
+                if not bars:
+                    logger.warning("No cross-asset bars for {} @ {}", symbol, bar_size)
+                    continue
+
+                df = util.df(bars)
+                df.rename(columns={"date": "timestamp"}, inplace=True)
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+                df.set_index("timestamp", inplace=True)
+                df.sort_index(inplace=True)
+                self._frames[symbol][bar_size] = df
+                logger.info("Loaded {} cross-asset bars for {} @ {}", len(df), symbol, bar_size)
+
+            except Exception:
+                logger.exception("Error fetching cross-asset bars for {}", symbol)
+
+    # ------------------------------------------------------------------
+    # Contract roll detection
+    # ------------------------------------------------------------------
+
+    async def check_contract_roll(self, symbol: str) -> bool:
+        """Check if a futures contract needs to be rolled to the next month.
+
+        Detects roll by comparing the currently qualified contract's expiry
+        against the last known expiry. When a roll is detected the contract
+        is re-qualified and the cache is updated.
+
+        Returns True if a roll occurred.
+        """
+        if symbol not in settings.FUTURES_INSTRUMENTS:
+            return False
+
+        contract = self._contracts[symbol]
+        try:
+            qualified = await self._ib.qualifyContractsAsync(contract)
+            if not qualified or not qualified[0]:
+                return False
+
+            new_contract = qualified[0]
+            new_expiry = getattr(new_contract, "lastTradeDateOrContractMonth", "")
+            old_expiry = self._active_expiries.get(symbol, "")
+
+            if old_expiry and new_expiry != old_expiry:
+                logger.warning(
+                    "Contract roll detected for {}: {} -> {}",
+                    symbol,
+                    old_expiry,
+                    new_expiry,
+                )
+                self._contracts[symbol] = new_contract
+                self._active_expiries[symbol] = new_expiry
+                return True
+
+            self._active_expiries[symbol] = new_expiry
+            return False
+
+        except Exception:
+            logger.exception("Error checking contract roll for {}", symbol)
+            return False
+
+    def get_enriched_dataframe(
+        self, symbol: str, bar_size: str = "5 mins"
+    ) -> pd.DataFrame:
+        """Return OHLCV DataFrame enriched with cross-asset columns.
+
+        Merges DXY, SPX, crack spread components, and second-month futures
+        data as additional columns for the technical engine.
+        """
+        df = self.get_dataframe(symbol, bar_size)
+        if df.empty:
+            return df
+
+        # Add DXY close for oil-DXY correlation
+        dxy_df = self._frames.get("DX", {}).get(bar_size, pd.DataFrame())
+        if not dxy_df.empty and "close" in dxy_df.columns:
+            df["close_dxy"] = dxy_df["close"].reindex(df.index, method="ffill")
+
+        # Add SPX close for oil-SPX correlation
+        es_df = self._frames.get("ES", {}).get(bar_size, pd.DataFrame())
+        if not es_df.empty and "close" in es_df.columns:
+            df["close_spx"] = es_df["close"].reindex(df.index, method="ffill")
+
+        # Add crack spread components
+        rb_df = self._frames.get("RB", {}).get(bar_size, pd.DataFrame())
+        if not rb_df.empty and "close" in rb_df.columns:
+            df["close_rb"] = rb_df["close"].reindex(df.index, method="ffill")
+
+        ho_df = self._frames.get("HO", {}).get(bar_size, pd.DataFrame())
+        if not ho_df.empty and "close" in ho_df.columns:
+            df["close_ho"] = ho_df["close"].reindex(df.index, method="ffill")
+
+        # WTI/Brent spread
+        if symbol == "CL":
+            bz_df = self._frames.get("BZ", {}).get(bar_size, pd.DataFrame())
+            if not bz_df.empty and "close" in bz_df.columns:
+                df["close_wti"] = df["close"]
+                df["close_brent"] = bz_df["close"].reindex(df.index, method="ffill")
+        elif symbol == "BZ":
+            cl_df = self._frames.get("CL", {}).get(bar_size, pd.DataFrame())
+            if not cl_df.empty and "close" in cl_df.columns:
+                df["close_wti"] = cl_df["close"].reindex(df.index, method="ffill")
+                df["close_brent"] = df["close"]
+
+        return df

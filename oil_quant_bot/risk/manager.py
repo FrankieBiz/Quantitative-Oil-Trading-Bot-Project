@@ -20,6 +20,7 @@ from loguru import logger
 
 from config import settings
 from db.models import (
+    MarketRegime,
     SystemAlert,
     Trade,
     TradeDirection,
@@ -525,6 +526,112 @@ class RiskManager:
         )
         return var_95
 
+    def calculate_marginal_var(
+        self,
+        existing_positions: List[Dict],
+        proposed_trade: Dict,
+        returns_history: np.ndarray,
+    ) -> float:
+        """Estimate 1-day 95 % VaR with the proposed trade included.
+
+        This gives a better pre-trade risk picture than checking VaR on
+        the existing portfolio alone, because it captures the marginal
+        impact of the new position on overall portfolio risk.
+
+        Parameters
+        ----------
+        existing_positions : list[dict]
+            Currently open positions, each with ``"instrument"`` and
+            ``"notional"``.
+        proposed_trade : dict
+            Must contain ``"instrument"`` and ``"notional"`` for the new
+            trade.
+        returns_history : numpy.ndarray
+            2-D array of shape ``(n_days, n_instruments)`` where the
+            **last column** corresponds to the proposed trade's
+            instrument.  The first *N* columns correspond to
+            ``existing_positions`` in the same order.
+
+        Returns
+        -------
+        float
+            VaR(95 %) as a positive fraction of total notional for the
+            combined portfolio (existing + proposed).  Returns 0.0 if
+            inputs are insufficient.
+        """
+        combined_positions = list(existing_positions) + [proposed_trade]
+        return self.calculate_var_95(combined_positions, returns_history)
+
+    def dynamic_stop_adjustment(
+        self,
+        stop_distance: float,
+        returns_history: np.ndarray,
+    ) -> float:
+        """Adjust a stop distance based on the current volatility regime.
+
+        The method compares the current historical volatility (standard
+        deviation of the most recent returns window) against the median
+        historical volatility to classify the regime:
+
+        * **High-vol** (hist_vol > 1.5x median): widen stops by 1.3x.
+        * **Low-vol**  (hist_vol < 0.5x median): tighten stops by 0.7x.
+        * **Normal**: no adjustment.
+
+        Parameters
+        ----------
+        stop_distance : float
+            The base stop distance (e.g. ``ATR * multiplier``).
+        returns_history : numpy.ndarray
+            1-D array of recent daily returns used to estimate volatility.
+
+        Returns
+        -------
+        float
+            Adjusted stop distance.
+        """
+        if returns_history.size < 2:
+            return stop_distance
+
+        # Rolling volatilities: use a window equal to 1/4 of the history
+        # length (minimum 2) to build a distribution of vol estimates.
+        window = max(2, len(returns_history) // 4)
+        vols: List[float] = []
+        for i in range(window, len(returns_history) + 1):
+            segment = returns_history[i - window : i]
+            vols.append(float(np.std(segment, ddof=1)))
+
+        if len(vols) < 2:
+            return stop_distance
+
+        current_vol = vols[-1]
+        median_vol = float(np.median(vols))
+
+        if median_vol <= 0.0:
+            return stop_distance
+
+        if current_vol > 1.5 * median_vol:
+            multiplier = 1.3
+            label = "high-vol"
+        elif current_vol < 0.5 * median_vol:
+            multiplier = 0.7
+            label = "low-vol"
+        else:
+            multiplier = 1.0
+            label = "normal"
+
+        adjusted = stop_distance * multiplier
+        logger.debug(
+            "DynamicStop | regime={lbl} cur_vol={cv:.6f} med_vol={mv:.6f} "
+            "mult={m} base={b:.6f} adjusted={a:.6f}",
+            lbl=label,
+            cv=current_vol,
+            mv=median_vol,
+            m=multiplier,
+            b=stop_distance,
+            a=adjusted,
+        )
+        return adjusted
+
     # --------------------------------------------------------------------- #
     # 6. Sharpe Monitoring (rolling 30-day)
     # --------------------------------------------------------------------- #
@@ -711,12 +818,18 @@ class RiskManager:
         if tp is None:
             return (False, "Risk/reward ratio below minimum", 0.0)
 
-        # -- VaR guard ------------------------------------------------------
+        # -- VaR guard (marginal VaR when possible) --------------------------
         if returns_history.size > 0 and len(open_positions) > 0:
-            var = self.calculate_var_95(open_positions, returns_history)
+            proposed_trade = {
+                "instrument": instrument,
+                "notional": requested_size,
+            }
+            var = self.calculate_marginal_var(
+                open_positions, proposed_trade, returns_history,
+            )
             if var > settings.VAR_95_DAILY_LIMIT:
                 msg = (
-                    f"VaR(95%) {var:.4f} exceeds limit "
+                    f"Marginal VaR(95%) {var:.4f} exceeds limit "
                     f"{settings.VAR_95_DAILY_LIMIT}"
                 )
                 logger.warning(msg)
@@ -741,6 +854,25 @@ class RiskManager:
             logger.info(
                 "Size reduced by {r:.0%} due to low Sharpe",
                 r=settings.SHARPE_POSITION_REDUCTION,
+            )
+
+        # -- Regime-aware sizing --------------------------------------------
+        regime: Optional[MarketRegime] = trade_params.get("regime")
+        if regime is not None:
+            if regime == MarketRegime.TRENDING:
+                regime_mult = settings.TRENDING_POSITION_MULTIPLIER
+            elif regime == MarketRegime.CHOPPY:
+                regime_mult = 1.0 - settings.CHOPPY_POSITION_REDUCTION
+            else:
+                # MEAN_REVERTING or any future default
+                regime_mult = 1.0
+            adjusted_size *= regime_mult
+            logger.info(
+                "Regime adjustment | regime={r} multiplier={m:.2f} "
+                "adjusted_size={s:.2f}",
+                r=regime.value,
+                m=regime_mult,
+                s=adjusted_size,
             )
 
         # -- Final sanity ---------------------------------------------------

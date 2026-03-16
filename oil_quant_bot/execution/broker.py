@@ -979,7 +979,7 @@ class BrokerExecutor:
                         else:
                             pnl = (db_trade.entry_price - fill_price) * db_trade.entry_quantity
                         db_trade.realized_pnl = pnl
-                        db_trade.slippage = abs(pnl) * self._slippage_pct
+                        db_trade.slippage = abs(fill_price * db_trade.entry_quantity) * self._slippage_pct
                         db_trade.updated_at = datetime.utcnow()
                         session.commit()
                 except Exception as exc:

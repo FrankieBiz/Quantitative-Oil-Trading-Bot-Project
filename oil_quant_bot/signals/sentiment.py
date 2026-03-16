@@ -174,13 +174,17 @@ class SentimentEngine:
     # ------------------------------------------------------------------
     # CSS momentum
     # ------------------------------------------------------------------
-    def compute_css_momentum(self, now: Optional[datetime] = None) -> float:
+    def compute_css_momentum(
+        self, now: Optional[datetime] = None, _cached_css: Optional[float] = None
+    ) -> float:
         """Compute CSS momentum: delta_CSS = CSS_t - CSS_(t - 1h).
 
         Parameters
         ----------
         now : datetime, optional
             Reference time.  Defaults to utcnow().
+        _cached_css : float, optional
+            Pre-computed CSS for *now* to avoid a redundant DB query.
 
         Returns
         -------
@@ -190,11 +194,68 @@ class SentimentEngine:
         if now is None:
             now = datetime.utcnow()
 
-        css_now = self.compute_css(now=now)
+        css_now = _cached_css if _cached_css is not None else self.compute_css(now=now)
         css_prev = self.compute_css(now=now - timedelta(hours=1))
         momentum = css_now - css_prev
         logger.debug("CSS momentum: {:.4f} (now={:.4f}, prev={:.4f})", momentum, css_now, css_prev)
         return momentum
+
+    # ------------------------------------------------------------------
+    # Sentiment regime shift detection
+    # ------------------------------------------------------------------
+    def detect_sentiment_regime_shift(self, now: Optional[datetime] = None) -> Dict:
+        """Compare CSS over 1h, 4h, and 12h horizons to detect regime shifts.
+
+        A regime shift is flagged when the magnitude of CSS change over any
+        horizon exceeds ``settings.SENTIMENT_REGIME_SHIFT_THRESHOLD``.
+
+        Parameters
+        ----------
+        now : datetime, optional
+            Reference time.  Defaults to utcnow().
+
+        Returns
+        -------
+        dict
+            regime_shift : bool
+                True if a regime shift is detected.
+            max_delta : float
+                Largest absolute CSS change across the three horizons.
+            deltas : dict
+                Per-horizon CSS deltas keyed by ``'1h'``, ``'4h'``, ``'12h'``.
+        """
+        if now is None:
+            now = datetime.utcnow()
+
+        css_now = self.compute_css(now=now)
+
+        horizons = {"1h": 1, "4h": 4, "12h": 12}
+        deltas: Dict[str, float] = {}
+        for label, hours in horizons.items():
+            css_past = self.compute_css(now=now - timedelta(hours=hours))
+            deltas[label] = css_now - css_past
+
+        max_delta = max(abs(d) for d in deltas.values())
+        regime_shift = max_delta >= settings.SENTIMENT_REGIME_SHIFT_THRESHOLD
+
+        if regime_shift:
+            logger.warning(
+                "Sentiment regime shift detected (max_delta={:.4f}, threshold={:.4f})",
+                max_delta,
+                settings.SENTIMENT_REGIME_SHIFT_THRESHOLD,
+            )
+        else:
+            logger.debug(
+                "No sentiment regime shift (max_delta={:.4f}, threshold={:.4f})",
+                max_delta,
+                settings.SENTIMENT_REGIME_SHIFT_THRESHOLD,
+            )
+
+        return {
+            "regime_shift": regime_shift,
+            "max_delta": max_delta,
+            "deltas": deltas,
+        }
 
     # ------------------------------------------------------------------
     # Aggregated signal
@@ -205,15 +266,18 @@ class SentimentEngine:
         Returns
         -------
         dict
-            css_score  : float in [-1, 1]
-            css_momentum : float
-            css_volume : int  (number of records in the 48 h window)
+            css_score      : float in [-1, 1]
+            css_momentum   : float
+            css_volume     : int  (number of records in the 48 h window)
+            css_confidence : float in [0, 1] based on volume adequacy
+            css_regime_shift : bool  True when a regime shift is detected
         """
         if now is None:
             now = datetime.utcnow()
 
+        # Compute CSS once and pass the cached value to momentum
         css_score = self.compute_css(now=now)
-        css_momentum = self.compute_css_momentum(now=now)
+        css_momentum = self.compute_css_momentum(now=now, _cached_css=css_score)
 
         # Count records in the window
         cutoff = now - timedelta(hours=48)
@@ -225,6 +289,26 @@ class SentimentEngine:
                 .count()
             )
 
+            # --- Sentiment confidence gating ---
+            # When volume is below the minimum threshold, discount CSS
+            # toward 0 proportionally and report reduced confidence.
+            if css_volume < settings.MIN_SENTIMENT_VOLUME:
+                css_confidence = css_volume / settings.MIN_SENTIMENT_VOLUME
+                css_score = css_score * css_confidence
+                logger.info(
+                    "Low sentiment volume ({} < {}); CSS discounted to {:.4f}, confidence={:.2f}",
+                    css_volume,
+                    settings.MIN_SENTIMENT_VOLUME,
+                    css_score,
+                    css_confidence,
+                )
+            else:
+                css_confidence = 1.0
+
+            # --- Regime shift detection ---
+            regime_result = self.detect_sentiment_regime_shift(now=now)
+            css_regime_shift: bool = regime_result["regime_shift"]
+
             # Persist composite record
             record = CompositeSentiment(
                 timestamp=now,
@@ -235,14 +319,20 @@ class SentimentEngine:
             session.add(record)
             session.commit()
             logger.info(
-                "Sentiment signal: css={:.4f}, momentum={:.4f}, volume={}",
+                "Sentiment signal: css={:.4f}, momentum={:.4f}, volume={}, confidence={:.2f}, regime_shift={}",
                 css_score,
                 css_momentum,
                 css_volume,
+                css_confidence,
+                css_regime_shift,
             )
         except Exception:
             session.rollback()
             logger.exception("Failed to persist CompositeSentiment record")
+            # Provide safe defaults when persistence fails
+            css_confidence = 0.0
+            css_regime_shift = False
+            css_volume = 0
         finally:
             session.close()
 
@@ -250,4 +340,6 @@ class SentimentEngine:
             "css_score": css_score,
             "css_momentum": css_momentum,
             "css_volume": css_volume,
+            "css_confidence": css_confidence,
+            "css_regime_shift": css_regime_shift,
         }

@@ -98,6 +98,9 @@ def _full_technicals() -> dict:
         "wti_brent_spread": -3.5,
         "oil_dxy_corr20": -0.45,
         "oil_spx_corr20": 0.30,
+        "term_structure_spread": -0.5,
+        "crack_spread": 12.3,
+        "contango_flag": 1.0,
     }
 
 
@@ -106,6 +109,7 @@ def _full_sentiment() -> dict:
         "css_score": 0.6,
         "css_momentum": 0.1,
         "css_volume_zscore": 1.3,
+        "css_confidence": 0.95,
         "eia_surprise": -0.5,
     }
 
@@ -116,8 +120,8 @@ def _full_sentiment() -> dict:
 
 class TestFeatureNames:
 
-    def test_length_is_28(self, fe: FeatureEngineer):
-        assert fe.NUM_FEATURES == 28
+    def test_length_is_32(self, fe: FeatureEngineer):
+        assert fe.NUM_FEATURES == 32
 
     def test_feature_names_length_matches_num_features(self, fe: FeatureEngineer):
         assert len(fe.FEATURE_NAMES) == fe.NUM_FEATURES
@@ -125,8 +129,9 @@ class TestFeatureNames:
     def test_expected_feature_names_present(self, fe: FeatureEngineer):
         expected_subset = [
             "ema9", "rsi14", "atr14", "obv_zscore",
-            "css_score", "hour_sin", "hour_cos",
+            "css_score", "css_confidence", "hour_sin", "hour_cos",
             "dow_sin", "dow_cos", "eia_surprise",
+            "term_structure_spread", "crack_spread", "contango_flag",
         ]
         for name in expected_subset:
             assert name in fe.FEATURE_NAMES, f"{name} missing from FEATURE_NAMES"

@@ -328,10 +328,12 @@ class TestCSSVolume:
 
         with patch.object(engine, "compute_css", return_value=0.3), \
              patch.object(engine, "compute_css_momentum", return_value=0.05), \
+             patch.object(engine, "detect_sentiment_regime_shift", return_value={"regime_shift": False, "max_delta": 0.1, "deltas": {}}), \
              patch("signals.sentiment.get_session", return_value=mock_session), \
              patch("signals.sentiment.settings") as s:
             s.SENTIMENT_WEIGHTS = {"twitter": 0.20, "news_major": 0.45, "news_minor": 0.20, "eia": 0.15}
             s.RECENCY_DECAY_LAMBDA = 0.1
+            s.MIN_SENTIMENT_VOLUME = 10
             result = engine.get_sentiment_signal(now=now)
 
         assert result["css_volume"] == 42
@@ -349,10 +351,12 @@ class TestCSSVolume:
 
         with patch.object(engine, "compute_css", return_value=0.0), \
              patch.object(engine, "compute_css_momentum", return_value=0.0), \
+             patch.object(engine, "detect_sentiment_regime_shift", return_value={"regime_shift": False, "max_delta": 0.0, "deltas": {}}), \
              patch("signals.sentiment.get_session", return_value=mock_session), \
              patch("signals.sentiment.settings") as s:
             s.SENTIMENT_WEIGHTS = {"twitter": 0.20, "news_major": 0.45, "news_minor": 0.20, "eia": 0.15}
             s.RECENCY_DECAY_LAMBDA = 0.1
+            s.MIN_SENTIMENT_VOLUME = 10
             result = engine.get_sentiment_signal(now=now)
 
         assert result["css_volume"] == 0
@@ -503,20 +507,24 @@ class TestGetSentimentSignal:
         mock_query = MagicMock()
         mock_session.query.return_value = mock_query
         mock_query.filter.return_value = mock_query
-        mock_query.count.return_value = 10
+        mock_query.count.return_value = 20
 
         with patch.object(engine, "compute_css", return_value=0.3), \
              patch.object(engine, "compute_css_momentum", return_value=0.05), \
+             patch.object(engine, "detect_sentiment_regime_shift", return_value={"regime_shift": False, "max_delta": 0.1, "deltas": {}}), \
              patch("signals.sentiment.get_session", return_value=mock_session), \
              patch("signals.sentiment.settings") as s:
             s.SENTIMENT_WEIGHTS = {"twitter": 0.20, "news_major": 0.45, "news_minor": 0.20, "eia": 0.15}
             s.RECENCY_DECAY_LAMBDA = 0.1
+            s.MIN_SENTIMENT_VOLUME = 10
             result = engine.get_sentiment_signal(now=now)
 
-        assert set(result.keys()) == {"css_score", "css_momentum", "css_volume"}
+        assert set(result.keys()) == {"css_score", "css_momentum", "css_volume", "css_confidence", "css_regime_shift"}
         assert result["css_score"] == pytest.approx(0.3)
         assert result["css_momentum"] == pytest.approx(0.05)
-        assert result["css_volume"] == 10
+        assert result["css_volume"] == 20
+        assert result["css_confidence"] == 1.0
+        assert result["css_regime_shift"] is False
 
     def test_persists_composite_record(self, engine):
         now = datetime(2025, 6, 1, 12, 0, 0)
@@ -524,14 +532,16 @@ class TestGetSentimentSignal:
         mock_query = MagicMock()
         mock_session.query.return_value = mock_query
         mock_query.filter.return_value = mock_query
-        mock_query.count.return_value = 5
+        mock_query.count.return_value = 15
 
         with patch.object(engine, "compute_css", return_value=0.1), \
              patch.object(engine, "compute_css_momentum", return_value=-0.02), \
+             patch.object(engine, "detect_sentiment_regime_shift", return_value={"regime_shift": False, "max_delta": 0.05, "deltas": {}}), \
              patch("signals.sentiment.get_session", return_value=mock_session), \
              patch("signals.sentiment.settings") as s:
             s.SENTIMENT_WEIGHTS = {"twitter": 0.20, "news_major": 0.45, "news_minor": 0.20, "eia": 0.15}
             s.RECENCY_DECAY_LAMBDA = 0.1
+            s.MIN_SENTIMENT_VOLUME = 10
             engine.get_sentiment_signal(now=now)
 
         mock_session.add.assert_called_once()

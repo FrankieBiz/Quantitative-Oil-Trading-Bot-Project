@@ -29,17 +29,21 @@ class BacktestParams:
 
     Attributes:
         init_cash: Starting portfolio equity in USD.
-        slippage_pct: One-way slippage as a fraction (e.g. 0.0002 = 0.02%).
-        commission_pct: One-way commission as a fraction.
+        slippage_pct: One-way slippage as a fraction (e.g. 0.0005 = 0.05%).
+        commission_per_contract: Per-contract commission in USD (for futures).
+        commission_pct: Fallback percentage-based commission (for ETFs).
         risk_free_rate: Annualised risk-free rate for Sharpe calculations.
         freq: Pandas frequency string that matches the bar cadence.
+        use_per_contract_commission: Use per-contract instead of pct commission.
     """
 
     init_cash: float = 100_000.0
     slippage_pct: float = settings.SLIPPAGE_PCT
+    commission_per_contract: float = settings.COMMISSION_PER_CONTRACT
     commission_pct: float = 0.001
     risk_free_rate: float = settings.RISK_FREE_RATE
     freq: str = "1D"
+    use_per_contract_commission: bool = False
 
 
 @dataclass
