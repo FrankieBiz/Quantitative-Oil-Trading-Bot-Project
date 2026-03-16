@@ -74,10 +74,61 @@ python -m oil_quant_bot.main
 
 # Backtest mode
 python -m oil_quant_bot.backtest.runner --start 2023-01-01 --end 2024-01-01
-
-# Dashboard (FastAPI)
-uvicorn oil_quant_bot.dashboard.app:app --reload --port 8000
 ```
+
+---
+
+## Dashboard (Multi-Tab Web App)
+
+The dashboard is a Plotly Dash web app with 4 tabs: **Overview**, **Performance Analytics**, **Trade Log**, and **System Logs**. It works on any device with a browser.
+
+### Quick Start
+
+```bash
+# Launch on local network (accessible from any device on same WiFi)
+python -m oil_quant_bot.dashboard.serve
+
+# The terminal will show:
+#   Local:   http://localhost:8050
+#   Network: http://192.168.x.x:8050    <-- use this on phone/Mac
+```
+
+### Access from Your Phone
+
+1. Run the dashboard on your Windows PC at home
+2. Open `http://<your-PC-IP>:8050` in Safari/Chrome on your phone
+3. **iOS**: Tap Share > "Add to Home Screen" — it runs like a native app
+4. **Android**: Tap menu > "Add to Home Screen"
+
+### Access from Mac (same network)
+
+Open `http://<your-PC-IP>:8050` in your Mac browser.
+
+### Access from Anywhere (remote / different network)
+
+Use a Cloudflare Tunnel for free HTTPS remote access:
+
+```bash
+# 1. Install cloudflared
+# macOS:   brew install cloudflare/cloudflare/cloudflared
+# Windows: winget install Cloudflare.cloudflared
+
+# 2. Launch with tunnel
+python -m oil_quant_bot.dashboard.serve --tunnel
+
+# The terminal will show a public URL like:
+#   REMOTE URL: https://random-name.trycloudflare.com
+# Open that URL on any device, anywhere.
+```
+
+### Dashboard Tabs
+
+| Tab | What it shows |
+|-----|---------------|
+| **Overview** | Equity curve, open positions, recent trades, sentiment gauge, feature importance, returns heatmap, alerts, system health |
+| **Performance Analytics** | Win rate, total P&L, profit factor, Sharpe ratio, max drawdown, streaks, cumulative P&L chart, P&L distribution, drawdown chart, win/loss by regime |
+| **Trade Log** | Full trade history with date range picker, direction/status filters, native column sorting & filtering, CSV export |
+| **System Logs** | Real-time log viewer (live buffer or log file), severity filtering, newest-first display |
 
 ---
 
