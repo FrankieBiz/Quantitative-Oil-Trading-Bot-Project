@@ -36,6 +36,10 @@ Quantitative-Oil-Trading-Bot-Project/
 
 ## Setup
 
+> **Full step-by-step guide**: See [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for detailed instructions covering Windows PC setup, IBKR configuration, Mac/iPhone/Android access, remote access via Cloudflare Tunnel, firewall settings, and troubleshooting.
+
+### Quick Setup
+
 ```bash
 # 1. Clone the repo
 git clone https://github.com/FrankieBiz/Quantitative-Oil-Trading-Bot-Project.git
