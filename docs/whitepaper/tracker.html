@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oil Quant Bot — White Paper Project Tracker</title>
+<style>
+:root {
+  --bg: #1e1e2f;
+  --card: #27293d;
+  --card-hover: #2f3150;
+  --header: #1a1a2e;
+  --accent: #00d2ff;
+  --positive: #00e676;
+  --negative: #ff1744;
+  --warning: #ffab00;
+  --text: #e0e0e0;
+  --muted: #6c757d;
+  --border: #3a3a5c;
+  --user1: #00d2ff;
+  --user2: #ff6ec7;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+/* ── Header ── */
+.app-header {
+  background: var(--header);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.app-header h1 {
+  font-size: 1.2rem;
+  color: var(--accent);
+  font-weight: 700;
+}
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.progress-bar-wrap {
+  width: 200px;
+  height: 8px;
+  background: var(--card);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--positive));
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.progress-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.view-toggle {
+  display: flex;
+  gap: 4px;
+}
+.view-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+.view-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+/* ── User Panel ── */
+.user-panel {
+  display: flex;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--header);
+  border-bottom: 1px solid var(--border);
+}
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  cursor: pointer;
+}
+.user-card.active { border-color: var(--accent); }
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #000;
+}
+.user-name-input {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 0.85rem;
+  width: 100px;
+  outline: none;
+}
+.user-stats {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+/* ── Board View ── */
+.board {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  overflow-x: auto;
+  min-height: calc(100vh - 120px);
+}
+.phase-column {
+  min-width: 300px;
+  max-width: 320px;
+  flex-shrink: 0;
+  background: var(--card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+.phase-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 8px 8px 0 0;
+}
+.phase-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.phase-count {
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.phase-week {
+  font-size: 0.7rem;
+  color: var(--warning);
+  margin-left: 6px;
+}
+.phase-body {
+  padding: 8px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 60px;
+}
+.phase-body.drag-over {
+  background: rgba(0,210,255,0.05);
+  border: 2px dashed var(--accent);
+  border-radius: 0 0 8px 8px;
+}
+/* ── Task Cards ── */
+.task-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  cursor: grab;
+  transition: all 0.2s;
+  position: relative;
+}
+.task-card:hover { background: var(--card-hover); border-color: var(--accent); }
+.task-card.dragging { opacity: 0.4; transform: rotate(2deg); }
+.task-card.completed .task-text { text-decoration: line-through; color: var(--muted); }
+.task-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.task-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  transition: all 0.2s;
+}
+.task-check.checked {
+  background: var(--positive);
+  border-color: var(--positive);
+}
+.task-check.checked::after {
+  content: '✓';
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.task-text {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  flex: 1;
+}
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.task-tag {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.tag-research { background: #1a3a5c; color: #64b5f6; }
+.tag-coding { background: #1a4a2e; color: #81c784; }
+.tag-reading { background: #4a3a1a; color: #ffb74d; }
+.tag-experiment { background: #4a1a3a; color: #f48fb1; }
+.tag-writing { background: #3a1a4a; color: #ce93d8; }
+.task-assignee {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.task-assignee:hover { transform: scale(1.2); }
+.task-due {
+  font-size: 0.65rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+.task-due.overdue { color: var(--negative); }
+.task-priority {
+  width: 4px;
+  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 6px 0 0 6px;
+}
+.priority-high { background: var(--negative); }
+.priority-medium { background: var(--warning); }
+.priority-low { background: var(--positive); }
+/* ── Calendar View ── */
+.calendar-view {
+  padding: 16px 24px;
+  display: none;
+}
+.calendar-view.active { display: block; }
+.board.active { display: flex; }
+.board:not(.active) { display: none; }
+.cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.cal-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.cal-nav-btn {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.cal-nav-btn:hover { border-color: var(--accent); }
+.cal-month { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.cal-day-header {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 8px 0;
+  font-weight: 600;
+}
+.cal-day {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-height: 100px;
+  padding: 4px;
+  font-size: 0.7rem;
+}
+.cal-day.today { border-color: var(--accent); }
+.cal-day.other-month { opacity: 0.3; }
+.cal-day-num {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: right;
+  padding: 2px 4px;
+}
+.cal-task {
+  background: var(--bg);
+  border-left: 3px solid var(--accent);
+  padding: 2px 4px;
+  margin: 2px 0;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-task.done { opacity: 0.4; text-decoration: line-through; }
+/* ── Timeline View ── */
+.timeline-view {
+  padding: 16px 24px;
+  display: none;
+}
+.timeline-view.active { display: block; }
+.timeline-phase {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.timeline-bar {
+  width: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  position: relative;
+  flex-shrink: 0;
+}
+.timeline-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+  position: absolute;
+  top: 0;
+  left: -6px;
+}
+.timeline-dot.done { background: var(--positive); }
+.timeline-content { flex: 1; }
+.timeline-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.timeline-tasks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 6px;
+}
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.active { display: flex; }
+.modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+.modal h3 {
+  color: var(--accent);
+  margin-bottom: 16px;
+  font-size: 1rem;
+}
+.modal label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
+.modal input, .modal select, .modal textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.modal textarea { resize: vertical; min-height: 60px; }
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+.btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+.btn-primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+.btn-danger { background: var(--negative); color: #fff; border-color: var(--negative); }
+.btn-secondary { background: var(--card); color: var(--text); }
+.btn:hover { filter: brightness(1.15); }
+/* ── Add Task ── */
+.add-task-btn {
+  width: 100%;
+  padding: 6px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-top: 4px;
+  transition: all 0.2s;
+}
+.add-task-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .board { padding: 8px; gap: 8px; }
+  .phase-column { min-width: 260px; }
+  .user-panel { flex-wrap: wrap; padding: 8px 12px; }
+  .app-header { padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+  .progress-bar-wrap { width: 120px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="app-header">
+  <h1>White Paper Project Tracker</h1>
+  <div class="header-controls">
+    <span class="progress-label" id="progress-text">0%</span>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+    </div>
+    <div class="view-toggle">
+      <button class="view-btn active" data-view="board">Board</button>
+      <button class="view-btn" data-view="calendar">Calendar</button>
+      <button class="view-btn" data-view="timeline">Timeline</button>
+    </div>
+  </div>
+</header>
+
+<!-- ═══ USER PANEL ═══ -->
+<div class="user-panel">
+  <div class="user-card active" data-user="0">
+    <div class="user-avatar" style="background:var(--user1)">U1</div>
+    <div>
+      <input class="user-name-input" data-user="0" value="You" placeholder="Your name">
+      <div class="user-stats" id="user0-stats">0/0 tasks</div>
+    </div>
+  </div>
+  <div class="user-card" data-user="1">
+    <div class="user-avatar" style="background:var(--user2)">U2</div>
+    <div>
+      <input class="user-name-input" data-user="1" value="Partner" placeholder="Partner name">
+      <div class="user-stats" id="user1-stats">0/0 tasks</div>
+    </div>
+  </div>
+  <button class="btn btn-secondary" onclick="exportData()" style="margin-left:auto;">Export JSON</button>
+  <label class="btn btn-secondary" style="margin-left:4px;">Import JSON<input type="file" accept=".json" style="display:none" onchange="importData(event)"></label>
+</div>
+
+<!-- ═══ BOARD VIEW ═══ -->
+<div class="board active" id="board-view"></div>
+
+<!-- ═══ CALENDAR VIEW ═══ -->
+<div class="calendar-view" id="calendar-view">
+  <div class="cal-header">
+    <div class="cal-nav">
+      <button class="cal-nav-btn" onclick="calNav(-1)">&larr;</button>
+      <span class="cal-month" id="cal-month"></span>
+      <button class="cal-nav-btn" onclick="calNav(1)">&rarr;</button>
+    </div>
+  </div>
+  <div class="cal-grid" id="cal-grid"></div>
+</div>
+
+<!-- ═══ TIMELINE VIEW ═══ -->
+<div class="timeline-view" id="timeline-view"></div>
+
+<!-- ═══ EDIT MODAL ═══ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">Edit Task</h3>
+    <label>Task</label>
+    <textarea id="modal-text"></textarea>
+    <label>Assigned To</label>
+    <select id="modal-assignee">
+      <option value="">Unassigned</option>
+      <option value="0">User 1</option>
+      <option value="1">User 2</option>
+    </select>
+    <label>Due Date</label>
+    <input type="date" id="modal-due">
+    <label>Priority</label>
+    <select id="modal-priority">
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+    <label>Type</label>
+    <select id="modal-tag">
+      <option value="research">Research</option>
+      <option value="coding">Coding</option>
+      <option value="reading">Reading</option>
+      <option value="experiment">Experiment</option>
+      <option value="writing">Writing</option>
+    </select>
+    <label>Notes</label>
+    <textarea id="modal-notes" placeholder="Optional notes..."></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="modal-delete">Delete</button>
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════════
+
+const DEFAULT_PHASES = [
+  { id:'p1', title:'Phase 1: Oil Market', week:'Wk 1-2', tasks:[
+    {id:'t1',text:'Read 5 recent EIA weekly reports',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t2',text:'Watch WTI/Brent spread for 2 weeks',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+    {id:'t3',text:'Read Kilian (2009) — oil shocks paper',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t4',text:'Read Hamilton (2009) — 2007-08 oil shock',done:false,assignee:'',due:'',priority:'medium',tag:'reading',notes:''},
+    {id:'t5',text:'Look up CL futures specs on CME Group',done:false,assignee:'',due:'',priority:'low',tag:'research',notes:''},
+    {id:'t6',text:'Study contango vs backwardation dynamics',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+    {id:'t7',text:'Understand 3:2:1 crack spread formula',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+  ]},
+  { id:'p2', title:'Phase 2: ML Foundations', week:'Wk 2-4', tasks:[
+    {id:'t8',text:'Read Chen & Guestrin (2016) XGBoost paper',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t9',text:'Run XGBoost model on historical data, export per-fold metrics',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t10',text:'Plot train vs test accuracy across walk-forward folds',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:'Check for overfitting: train >> test'},
+    {id:'t11',text:'Print feature importance rankings',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:''},
+    {id:'t12',text:'Ablation: remove sentiment features, re-run',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:'Does performance drop?'},
+    {id:'t13',text:'Ablation: remove oil-specific features, re-run',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:'Does performance drop?'},
+    {id:'t14',text:'Study how volatility-scaled labels work in signal_model.py',done:false,assignee:'',due:'',priority:'medium',tag:'coding',notes:''},
+  ]},
+  { id:'p3', title:'Phase 3: Sentiment', week:'Wk 3-4', tasks:[
+    {id:'t15',text:'Read FinBERT paper: Araci (2019)',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t16',text:'Run FinBERT on 10 real oil headlines, check scores',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t17',text:'Test edge cases: "OPEC cuts production" should be bullish',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:''},
+    {id:'t18',text:'Compute CSS manually for a sample day',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+    {id:'t19',text:'Research CrudeBERT as potential improvement',done:false,assignee:'',due:'',priority:'low',tag:'research',notes:''},
+    {id:'t20',text:'Test: does sentiment improve OOS accuracy?',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+  ]},
+  { id:'p4', title:'Phase 4: Regime Detection', week:'Wk 4-5', tasks:[
+    {id:'t21',text:'Calculate Hurst exponent on WTI daily 2019-2024',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t22',text:'Plot raw Hurst vs median-smoothed Hurst',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:'This becomes a figure in the paper'},
+    {id:'t23',text:'Count regime switches with/without hysteresis',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:'Key result for the paper'},
+    {id:'t24',text:'Compare Hurst regime detection vs ADX-only',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:''},
+    {id:'t25',text:'Read about Schmitt trigger (electrical engineering analogy)',done:false,assignee:'',due:'',priority:'low',tag:'reading',notes:''},
+    {id:'t26',text:'Test: does regime detection improve performance?',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+  ]},
+  { id:'p5', title:'Phase 5: Risk Management', week:'Wk 5-6', tasks:[
+    {id:'t27',text:'Read Kelly (1956) original paper',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t28',text:'Read Thorp (2006) on Kelly in practice',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t29',text:'Simulate full/half/quarter Kelly — plot equity curves',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:'1000 trade sequences, 55% WR, 1.5:1'},
+    {id:'t30',text:'Trace a sample trade through all 7 risk layers',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+    {id:'t31',text:'Read risk/manager.py end-to-end',done:false,assignee:'',due:'',priority:'medium',tag:'coding',notes:''},
+    {id:'t32',text:'Study Monte Carlo VaR approach in risk manager',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+  ]},
+  { id:'p6', title:'Phase 6: Backtesting', week:'Wk 6-7', tasks:[
+    {id:'t33',text:'Read Lopez de Prado Ch.7 on walk-forward validation',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:''},
+    {id:'t34',text:'Read backtest/engine.py, understand fold generation',done:false,assignee:'',due:'',priority:'medium',tag:'coding',notes:''},
+    {id:'t35',text:'Understand equity curve stitching logic',done:false,assignee:'',due:'',priority:'medium',tag:'coding',notes:''},
+    {id:'t36',text:'Understand Monte Carlo ruin probability code',done:false,assignee:'',due:'',priority:'medium',tag:'coding',notes:''},
+  ]},
+  { id:'p7', title:'Phase 7: Experiments', week:'Wk 7-9', tasks:[
+    {id:'t37',text:'Run full walk-forward backtest (2019-2024)',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:'Record: return, Sharpe, DD, WR, PF'},
+    {id:'t38',text:'Run random signals baseline (100 MC runs)',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t39',text:'Run buy-and-hold WTI as comparison',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:''},
+    {id:'t40',text:'Run EMA crossover as comparison',done:false,assignee:'',due:'',priority:'medium',tag:'experiment',notes:''},
+    {id:'t41',text:'Run full ablation study (5 variants)',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t42',text:'Run 10K Monte Carlo simulation on equity curve',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t43',text:'Compare IS vs OOS Sharpe (OOS should be > 50% of IS)',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+    {id:'t44',text:'Run paper trading for 2-4 weeks',done:false,assignee:'',due:'',priority:'high',tag:'experiment',notes:''},
+  ]},
+  { id:'p8', title:'Phase 8: Reading List', week:'Throughout', tasks:[
+    {id:'t45',text:'Tetlock (2007) — Giving Content to Investor Sentiment',done:false,assignee:'',due:'',priority:'medium',tag:'reading',notes:''},
+    {id:'t46',text:'Baker & Wurgler (2007) — Investor Sentiment',done:false,assignee:'',due:'',priority:'medium',tag:'reading',notes:''},
+    {id:'t47',text:'Harvey & Liu (2015) — Backtesting pitfalls',done:false,assignee:'',due:'',priority:'high',tag:'reading',notes:'Must cite in limitations'},
+    {id:'t48',text:'McLean & Pontiff (2016) — Strategy decay',done:false,assignee:'',due:'',priority:'medium',tag:'reading',notes:''},
+    {id:'t49',text:'Baumeister & Kilian (2012) — Oil forecasting',done:false,assignee:'',due:'',priority:'medium',tag:'reading',notes:''},
+    {id:'t50',text:'Mandelbrot & Wallis (1968) — Hurst theory',done:false,assignee:'',due:'',priority:'low',tag:'reading',notes:''},
+  ]},
+  { id:'p9', title:'Phase 9: Write Paper', week:'Wk 9-12', tasks:[
+    {id:'t51',text:'Write Appendix (hyperparameters from settings.py)',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:'Easiest section — start here'},
+    {id:'t52',text:'Write System Architecture section',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:''},
+    {id:'t53',text:'Write Feature Engineering section',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:''},
+    {id:'t54',text:'Write Backtesting Methodology section',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:''},
+    {id:'t55',text:'Fill in Results tables with real numbers',done:false,assignee:'',due:'',priority:'high',tag:'writing',notes:''},
+    {id:'t56',text:'Write Risk Management section',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:''},
+    {id:'t57',text:'Write Regime Detection section (main contribution)',done:false,assignee:'',due:'',priority:'high',tag:'writing',notes:'Spend the most time here'},
+    {id:'t58',text:'Write Literature Review',done:false,assignee:'',due:'',priority:'high',tag:'writing',notes:'After reading the papers'},
+    {id:'t59',text:'Write Introduction',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:'After everything else'},
+    {id:'t60',text:'Write Abstract (last!)',done:false,assignee:'',due:'',priority:'medium',tag:'writing',notes:'Summarizes everything'},
+  ]},
+  { id:'p10', title:'Phase 10: Publish', week:'After', tasks:[
+    {id:'t61',text:'Upload to SSRN (free, instant)',done:false,assignee:'',due:'',priority:'high',tag:'research',notes:'Gets a DOI'},
+    {id:'t62',text:'Upload to arXiv (q-fin.TR)',done:false,assignee:'',due:'',priority:'medium',tag:'research',notes:''},
+    {id:'t63',text:'Consider journal submission if results are strong',done:false,assignee:'',due:'',priority:'low',tag:'writing',notes:'6-12 month timeline'},
+  ]},
+];
+
+let state = loadState();
+let currentModal = null;
+let calMonth = new Date().getMonth();
+let calYear = new Date().getFullYear();
+let dragTask = null;
+let dragSource = null;
+
+function loadState() {
+  try {
+    const s = localStorage.getItem('oilbot-tracker');
+    if (s) return JSON.parse(s);
+  } catch(e) {}
+  return { phases: JSON.parse(JSON.stringify(DEFAULT_PHASES)), users: ['You','Partner'] };
+}
+
+function saveState() {
+  localStorage.setItem('oilbot-tracker', JSON.stringify(state));
+}
+
+// ═══════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════
+
+function render() {
+  renderBoard();
+  renderCalendar();
+  renderTimeline();
+  updateProgress();
+  updateUserStats();
+  saveState();
+}
+
+function renderBoard() {
+  const board = document.getElementById('board-view');
+  board.innerHTML = '';
+  state.phases.forEach(phase => {
+    const done = phase.tasks.filter(t=>t.done).length;
+    const total = phase.tasks.length;
+    const col = document.createElement('div');
+    col.className = 'phase-column';
+    col.innerHTML = `
+      <div class="phase-header">
+        <div>
+          <span class="phase-title">${phase.title}</span>
+          <span class="phase-week">${phase.week}</span>
+        </div>
+        <span class="phase-count">${done}/${total}</span>
+      </div>
+      <div class="phase-body" data-phase="${phase.id}">
+        ${phase.tasks.map(t => renderTaskCard(t)).join('')}
+        <button class="add-task-btn" onclick="addTask('${phase.id}')">+ Add task</button>
+      </div>
+    `;
+    board.appendChild(col);
+  });
+  setupDragDrop();
+}
+
+function renderTaskCard(t) {
+  const assigneeHtml = t.assignee !== '' ? `<div class="task-assignee" style="background:var(--user${t.assignee})" onclick="event.stopPropagation();cycleAssignee('${t.id}')">${state.users[t.assignee]?.[0] || '?'}</div>` : `<div class="task-assignee" style="background:var(--muted);opacity:0.4" onclick="event.stopPropagation();cycleAssignee('${t.id}')">?</div>`;
+  const dueHtml = t.due ? `<span class="task-due ${isOverdue(t.due) && !t.done ? 'overdue' : ''}">${formatDate(t.due)}</span>` : '';
+  return `
+    <div class="task-card ${t.done ? 'completed' : ''}" data-id="${t.id}" draggable="true" onclick="openModal('${t.id}')">
+      <div class="task-priority priority-${t.priority}"></div>
+      <div class="task-top">
+        <div class="task-check ${t.done ? 'checked' : ''}" onclick="event.stopPropagation();toggleTask('${t.id}')"></div>
+        <span class="task-text">${t.text}</span>
+      </div>
+      <div class="task-meta">
+        <span class="task-tag tag-${t.tag}">${t.tag}</span>
+        ${assigneeHtml}
+        ${dueHtml}
+      </div>
+    </div>
+  `;
+}
+
+function renderTimeline() {
+  const el = document.getElementById('timeline-view');
+  el.innerHTML = '';
+  state.phases.forEach(phase => {
+    const done = phase.tasks.filter(t=>t.done).length;
+    const allDone = done === phase.tasks.length && phase.tasks.length > 0;
+    el.innerHTML += `
+      <div class="timeline-phase">
+        <div class="timeline-bar">
+          <div class="timeline-dot ${allDone ? 'done' : ''}"></div>
+        </div>
+        <div class="timeline-content">
+          <div class="timeline-title">${phase.title} <span class="phase-week">${phase.week}</span> <span class="phase-count">${done}/${phase.tasks.length}</span></div>
+          <div class="timeline-tasks">
+            ${phase.tasks.map(t => renderTaskCard(t)).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  });
+}
+
+function renderCalendar() {
+  document.getElementById('cal-month').textContent = new Date(calYear, calMonth).toLocaleDateString('en-US', {month:'long', year:'numeric'});
+  const grid = document.getElementById('cal-grid');
+  grid.innerHTML = '';
+  ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => {
+    grid.innerHTML += `<div class="cal-day-header">${d}</div>`;
+  });
+  const first = new Date(calYear, calMonth, 1);
+  const last = new Date(calYear, calMonth + 1, 0);
+  const startDay = first.getDay();
+  const today = new Date().toISOString().split('T')[0];
+  // Previous month padding
+  for (let i = 0; i < startDay; i++) {
+    const d = new Date(calYear, calMonth, -(startDay - i - 1));
+    grid.innerHTML += `<div class="cal-day other-month"><div class="cal-day-num">${d.getDate()}</div></div>`;
+  }
+  for (let d = 1; d <= last.getDate(); d++) {
+    const dateStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = dateStr === today;
+    const tasks = getAllTasks().filter(t => t.due === dateStr);
+    grid.innerHTML += `
+      <div class="cal-day ${isToday ? 'today' : ''}">
+        <div class="cal-day-num">${d}</div>
+        ${tasks.map(t => `<div class="cal-task ${t.done?'done':''}" onclick="openModal('${t.id}')">${t.text.substring(0,30)}</div>`).join('')}
+      </div>
+    `;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// INTERACTIONS
+// ═══════════════════════════════════════════════════════════
+
+function toggleTask(id) {
+  const t = findTask(id);
+  if (t) { t.done = !t.done; render(); }
+}
+
+function cycleAssignee(id) {
+  const t = findTask(id);
+  if (!t) return;
+  if (t.assignee === '') t.assignee = '0';
+  else if (t.assignee === '0') t.assignee = '1';
+  else t.assignee = '';
+  render();
+}
+
+function addTask(phaseId) {
+  const phase = state.phases.find(p => p.id === phaseId);
+  if (!phase) return;
+  const id = 't' + Date.now();
+  phase.tasks.push({ id, text:'New task', done:false, assignee:'', due:'', priority:'medium', tag:'research', notes:'' });
+  render();
+  openModal(id);
+}
+
+function openModal(id) {
+  const t = findTask(id);
+  if (!t) return;
+  currentModal = id;
+  document.getElementById('modal-text').value = t.text;
+  document.getElementById('modal-assignee').value = t.assignee;
+  document.getElementById('modal-due').value = t.due;
+  document.getElementById('modal-priority').value = t.priority;
+  document.getElementById('modal-tag').value = t.tag;
+  document.getElementById('modal-notes').value = t.notes || '';
+  document.getElementById('modal-overlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('active');
+  currentModal = null;
+}
+
+document.getElementById('modal-save').onclick = () => {
+  const t = findTask(currentModal);
+  if (!t) return;
+  t.text = document.getElementById('modal-text').value;
+  t.assignee = document.getElementById('modal-assignee').value;
+  t.due = document.getElementById('modal-due').value;
+  t.priority = document.getElementById('modal-priority').value;
+  t.tag = document.getElementById('modal-tag').value;
+  t.notes = document.getElementById('modal-notes').value;
+  closeModal();
+  render();
+};
+
+document.getElementById('modal-delete').onclick = () => {
+  for (const phase of state.phases) {
+    const idx = phase.tasks.findIndex(t => t.id === currentModal);
+    if (idx >= 0) { phase.tasks.splice(idx, 1); break; }
+  }
+  closeModal();
+  render();
+};
+
+document.getElementById('modal-overlay').onclick = (e) => {
+  if (e.target === e.currentTarget) closeModal();
+};
+
+// ═══════════════════════════════════════════════════════════
+// DRAG & DROP
+// ═══════════════════════════════════════════════════════════
+
+function setupDragDrop() {
+  document.querySelectorAll('.task-card[draggable]').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragTask = card.dataset.id;
+      dragSource = card.closest('.phase-body').dataset.phase;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      document.querySelectorAll('.phase-body').forEach(b => b.classList.remove('drag-over'));
+    });
+  });
+  document.querySelectorAll('.phase-body').forEach(body => {
+    body.addEventListener('dragover', e => {
+      e.preventDefault();
+      body.classList.add('drag-over');
+    });
+    body.addEventListener('dragleave', () => body.classList.remove('drag-over'));
+    body.addEventListener('drop', e => {
+      e.preventDefault();
+      body.classList.remove('drag-over');
+      const targetPhase = body.dataset.phase;
+      if (!dragTask || !dragSource || dragSource === targetPhase) return;
+      // Move task
+      const srcPhase = state.phases.find(p => p.id === dragSource);
+      const dstPhase = state.phases.find(p => p.id === targetPhase);
+      if (!srcPhase || !dstPhase) return;
+      const idx = srcPhase.tasks.findIndex(t => t.id === dragTask);
+      if (idx < 0) return;
+      const [task] = srcPhase.tasks.splice(idx, 1);
+      dstPhase.tasks.push(task);
+      dragTask = null;
+      dragSource = null;
+      render();
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// VIEW SWITCHING
+// ═══════════════════════════════════════════════════════════
+
+document.querySelectorAll('.view-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const view = btn.dataset.view;
+    document.getElementById('board-view').classList.toggle('active', view === 'board');
+    document.getElementById('calendar-view').classList.toggle('active', view === 'calendar');
+    document.getElementById('timeline-view').classList.toggle('active', view === 'timeline');
+  };
+});
+
+function calNav(dir) { calMonth += dir; if (calMonth > 11) { calMonth=0; calYear++; } if (calMonth < 0) { calMonth=11; calYear--; } renderCalendar(); }
+
+// ═══════════════════════════════════════════════════════════
+// USER NAMES
+// ═══════════════════════════════════════════════════════════
+
+document.querySelectorAll('.user-name-input').forEach(input => {
+  input.addEventListener('change', () => {
+    state.users[input.dataset.user] = input.value;
+    // Update assignee dropdown labels
+    const opts = document.getElementById('modal-assignee').options;
+    opts[1].text = state.users[0] || 'User 1';
+    opts[2].text = state.users[1] || 'User 2';
+    saveState();
+    render();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════
+
+function getAllTasks() { return state.phases.flatMap(p => p.tasks); }
+function findTask(id) { return getAllTasks().find(t => t.id === id); }
+function isOverdue(d) { return d && d < new Date().toISOString().split('T')[0]; }
+function formatDate(d) { if (!d) return ''; const dt = new Date(d+'T00:00:00'); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
+
+function updateProgress() {
+  const all = getAllTasks();
+  const done = all.filter(t => t.done).length;
+  const pct = all.length ? Math.round(done / all.length * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = `${done}/${all.length} (${pct}%)`;
+}
+
+function updateUserStats() {
+  [0,1].forEach(i => {
+    const tasks = getAllTasks().filter(t => t.assignee === String(i));
+    const done = tasks.filter(t => t.done).length;
+    document.getElementById(`user${i}-stats`).textContent = `${done}/${tasks.length} tasks`;
+  });
+  // Set user names
+  state.users.forEach((name, i) => {
+    const input = document.querySelector(`.user-name-input[data-user="${i}"]`);
+    if (input && input.value !== name) input.value = name;
+  });
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'whitepaper-tracker.json';
+  a.click();
+}
+
+function importData(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      state = JSON.parse(reader.result);
+      saveState();
+      render();
+    } catch(err) { alert('Invalid JSON file'); }
+  };
+  reader.readAsText(file);
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+render();
+</script>
+</body>
+</html>
