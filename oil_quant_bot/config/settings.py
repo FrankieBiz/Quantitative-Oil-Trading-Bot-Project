@@ -86,10 +86,23 @@ NEWS_KEYWORDS = [
     "oil inventory", "refinery", "pipeline", "sanctions", "SPR release", "Fed rate",
 ]
 
-# RSS Feeds
+# RSS Feeds — all free, no API keys needed
 RSS_FEEDS = {
+    # Major outlets (classified as news_major)
     "reuters": "https://www.reuters.com/rssFeed/energy",
+    "ap_news": "https://rsshub.app/apnews/topics/business",
+    # Government / institutional
     "eia": "https://www.eia.gov/rss/todayinenergy.xml",
+    "eia_petroleum": "https://www.eia.gov/rss/petroleum.xml",
+    "eia_weekly": "https://www.eia.gov/rss/press.xml",
+    # Oil & energy specialist sites (classified as news_minor)
+    "oilprice": "https://oilprice.com/rss/main",
+    "rigzone": "https://www.rigzone.com/news/rss/rigzone_latest.aspx",
+    "cnbc_energy": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19836768",
+    "marketwatch_energy": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    # Broader financial (for oil-related articles)
+    "seeking_alpha": "https://seekingalpha.com/sector/energy.xml",
+    "investing_com": "https://www.investing.com/rss/news_301.rss",
 }
 
 # EIA Weekly Report: Wednesday 10:30 AM ET
@@ -106,10 +119,13 @@ FINBERT_MODEL = "ProsusAI/finbert"
 FINBERT_MAX_LENGTH = 512
 
 # Source credibility weights
+# Weights are normalized at runtime — they don't need to sum to 1.0.
+# Sources with no data are excluded and the remaining weights are rescaled.
 SENTIMENT_WEIGHTS = {
-    "twitter": 0.20,
-    "news_major": 0.45,  # Reuters, Bloomberg, AP
-    "news_minor": 0.20,  # Other NewsAPI sources
+    "twitter": 0.15,
+    "reddit": 0.10,      # Free alternative social sentiment (no API key)
+    "news_major": 0.40,  # Reuters, Bloomberg, AP
+    "news_minor": 0.20,  # Other news / RSS sources
     "eia": 0.15,
 }
 

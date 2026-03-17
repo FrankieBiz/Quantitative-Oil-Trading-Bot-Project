@@ -39,6 +39,7 @@ from db.models import (
 from data.market_feed import MarketDataFeed
 from data.twitter_feed import TwitterFeed
 from data.news_feed import NewsFeed
+from data.reddit_feed import RedditFeed
 from data.eia_scraper import EIAScraper
 from signals.sentiment import SentimentEngine
 from signals.technicals import TechnicalEngine
@@ -69,6 +70,7 @@ class OilQuantBot:
         # Initialize components
         self.market_feed = MarketDataFeed()
         self.twitter_feed = TwitterFeed()
+        self.reddit_feed = RedditFeed()
         self.news_feed = NewsFeed()
         self.eia_scraper = EIAScraper()
         self.sentiment_engine = SentimentEngine()
@@ -587,14 +589,17 @@ class OilQuantBot:
         try:
             # Fetch from all sources concurrently
             twitter_task = asyncio.create_task(self.twitter_feed.fetch_tweets())
+            reddit_task = asyncio.create_task(self.reddit_feed.fetch_posts())
             news_task = asyncio.create_task(self.news_feed.fetch_all())
-            twitter_items, news_items = await asyncio.gather(
-                twitter_task, news_task, return_exceptions=True
+            twitter_items, reddit_items, news_items = await asyncio.gather(
+                twitter_task, reddit_task, news_task, return_exceptions=True
             )
 
             all_items = []
             if isinstance(twitter_items, list):
                 all_items.extend(twitter_items)
+            if isinstance(reddit_items, list):
+                all_items.extend(reddit_items)
             if isinstance(news_items, list):
                 all_items.extend(news_items)
 

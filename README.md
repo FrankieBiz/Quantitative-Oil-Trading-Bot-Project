@@ -37,6 +37,8 @@ Quantitative-Oil-Trading-Bot-Project/
 ## Setup
 
 > **Full step-by-step guide**: See [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for detailed instructions covering Windows PC setup, IBKR configuration, Mac/iPhone/Android access, remote access via Cloudflare Tunnel, firewall settings, and troubleshooting.
+>
+> **Complete API & signup guide**: See [docs/COMPLETE_API_GUIDE.md](docs/COMPLETE_API_GUIDE.md) for how to sign up for every service, get every API key, and configure everything from scratch.
 
 ### Quick Setup
 
@@ -50,7 +52,7 @@ python -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
 # 3. Install dependencies
-pip install -r oil_quant_bot/requirements.txt
+pip install -r requirements.txt
 
 # 4. Configure environment variables
 cp .env.example .env           # edit .env with your credentials
