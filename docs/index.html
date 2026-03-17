@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oil Trading Bot - Project Hub</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a1a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 3rem;
+            font-size: 1.1rem;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            max-width: 900px;
+            width: 100%;
+        }
+        .card {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            border-radius: 12px;
+            padding: 2rem;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: #00d4ff;
+            box-shadow: 0 8px 30px rgba(0, 212, 255, 0.15);
+        }
+        .card h2 {
+            font-size: 1.4rem;
+            margin-bottom: 0.75rem;
+            color: #fff;
+        }
+        .card p {
+            color: #999;
+            line-height: 1.6;
+        }
+        .card .icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        footer {
+            margin-top: 3rem;
+            color: #555;
+            font-size: 0.85rem;
+        }
+        footer a { color: #00d4ff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <h1>Quantitative Oil Trading Bot</h1>
+    <p class="subtitle">XGBoost + FinBERT + Hurst Regime Detection</p>
+
+    <div class="cards">
+        <a href="whitepaper/tracker.html" class="card">
+            <div class="icon">📋</div>
+            <h2>White Paper Tracker</h2>
+            <p>Interactive Kanban board, calendar, and timeline for tracking research progress. Dual-user support with drag-and-drop task management.</p>
+        </a>
+        <a href="https://github.com/FrankieBiz/Quantitative-Oil-Trading-Bot-Project" class="card">
+            <div class="icon">💻</div>
+            <h2>Source Code</h2>
+            <p>Full repository with trading bot, dashboard, documentation, and LaTeX white paper source.</p>
+        </a>
+    </div>
+
+    <footer>
+        <a href="https://github.com/FrankieBiz/Quantitative-Oil-Trading-Bot-Project">GitHub Repository</a>
+    </footer>
+</body>
+</html>
